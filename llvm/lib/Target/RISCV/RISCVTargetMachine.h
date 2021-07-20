@@ -23,6 +23,7 @@ namespace llvm {
 class RISCVTargetMachine : public LLVMTargetMachine {
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
   mutable StringMap<std::unique_ptr<RISCVSubtarget>> SubtargetMap;
+  bool isVortex_;
 
 public:
   RISCVTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
@@ -43,6 +44,10 @@ public:
   }
 
   TargetTransformInfo getTargetTransformInfo(const Function &F) override;
+
+  bool isVortex() const {
+    return isVortex_;
+  }
 };
 }
 

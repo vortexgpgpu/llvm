@@ -82,6 +82,12 @@ foreach i = {1-31} in
         SubtargetFeature<"reserve-x"#i, "UserReservedRegister[RISCV::X"#i#"]",
                          "true", "Reserve X"#i>;
 
+def FeatureVortex
+    : SubtargetFeature<"vortex", "HasExtVortex", "true", 
+                       "'Vortex' (Vortex ISA Extension)">;
+def HasExtVortex : Predicate<"Subtarget->HasExtVortex()">, 
+                                AssemblerPredicate<"FeatureVortex">;
+
 //===----------------------------------------------------------------------===//
 // Named operands for CSR instructions.
 //===----------------------------------------------------------------------===//

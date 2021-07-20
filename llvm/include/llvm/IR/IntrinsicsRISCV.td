@@ -65,4 +65,8 @@ let TargetPrefix = "riscv" in {
   // @llvm.riscv.masked.cmpxchg.{i32,i64}.<p>(...)
   defm int_riscv_masked_cmpxchg : MaskedAtomicRMWFiveArgIntrinsics;
 
+  // Vortex extension
+  def int_riscv_vx_split : Intrinsic<[], [llvm_i32_ty], []>;
+  def int_riscv_vx_join : Intrinsic<[], [], []>;
+
 } // TargetPrefix = "riscv"

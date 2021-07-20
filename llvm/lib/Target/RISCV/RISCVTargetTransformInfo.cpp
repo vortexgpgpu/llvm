@@ -11,6 +11,7 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/BasicTTIImpl.h"
 #include "llvm/CodeGen/TargetLowering.h"
+
 using namespace llvm;
 
 #define DEBUG_TYPE "riscvtti"
@@ -89,4 +90,8 @@ int RISCVTTIImpl::getIntImmCostIntrin(Intrinsic::ID IID, unsigned Idx,
                                       const APInt &Imm, Type *Ty) {
   // Prevent hoisting in unknown cases.
   return TTI::TCC_Free;
+}
+
+bool RISCVTTIImpl::isSourceOfDivergence(const Value *V) {
+  return vx_sdh_.eval(V);
 }

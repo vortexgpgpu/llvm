@@ -30,6 +30,9 @@
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Utils.h"
+#include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 using namespace llvm;
 
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
@@ -70,6 +73,9 @@ RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
 
   // RISC-V supports the MachineOutliner.
   setMachineOutliner(true);
+
+  // Detect Vortex extension
+  isVortex_ = FS.contains("vortex");
 }
 
 const RISCVSubtarget *
@@ -112,9 +118,12 @@ RISCVTargetMachine::getTargetTransformInfo(const Function &F) {
 
 namespace {
 class RISCVPassConfig : public TargetPassConfig {
+    bool isVortex_;
 public:
   RISCVPassConfig(RISCVTargetMachine &TM, PassManagerBase &PM)
-      : TargetPassConfig(TM, PM) {}
+      : TargetPassConfig(TM, PM) {
+    isVortex_ = TM.isVortex();
+  }
 
   RISCVTargetMachine &getRISCVTargetMachine() const {
     return getTM<RISCVTargetMachine>();
@@ -129,6 +138,7 @@ public:
   void addPreEmitPass() override;
   void addPreEmitPass2() override;
   void addPreRegAlloc() override;
+  bool addPreISel() override;
 };
 }
 
@@ -178,4 +188,15 @@ void RISCVPassConfig::addPreEmitPass2() {
 
 void RISCVPassConfig::addPreRegAlloc() {
   addPass(createRISCVMergeBaseOffsetOptPass());
+}
+
+bool RISCVPassConfig::addPreISel() {
+  if (isVortex_) {
+    addPass(createLowerSwitchPass());
+    addPass(createFlattenCFGPass());
+    addPass(createUnifyFunctionExitNodesPass());
+    //addPass(createStructurizeCFGPass());
+    addPass(createVortexBranchDivergencePass());  
+  }
+  return false;
 }

@@ -21,6 +21,7 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/BasicTTIImpl.h"
 #include "llvm/IR/Function.h"
+#include "VortexBranchDivergence.h"
 
 namespace llvm {
 
@@ -32,6 +33,7 @@ class RISCVTTIImpl : public BasicTTIImplBase<RISCVTTIImpl> {
 
   const RISCVSubtarget *ST;
   const RISCVTargetLowering *TLI;
+  vortex::isSourceOfDivergenceHandler vx_sdh_; 
 
   const RISCVSubtarget *getST() const { return ST; }
   const RISCVTargetLowering *getTLI() const { return TLI; }
@@ -45,6 +47,10 @@ public:
   int getIntImmCostInst(unsigned Opcode, unsigned Idx, const APInt &Imm, Type *Ty);
   int getIntImmCostIntrin(Intrinsic::ID IID, unsigned Idx, const APInt &Imm,
                           Type *Ty);
+
+  // Vortex extension
+  bool isSourceOfDivergence(const Value *V);
+  bool hasBranchDivergence() { return true; }
 };
 
 } // end namespace llvm

@@ -40,7 +40,8 @@ class RISCVSubtarget : public RISCVGenSubtargetInfo {
   bool HasStdExtD = false;
   bool HasStdExtC = false;
   bool HasRV64 = false;
-  bool IsRV32E = false;
+  bool IsRV32E = false;  
+  bool HasExtVortex = false;
   bool EnableLinkerRelax = false;
   bool EnableRVCHintInstrs = false;
   unsigned XLen = 32;
@@ -89,6 +90,7 @@ public:
   bool hasStdExtC() const { return HasStdExtC; }
   bool is64Bit() const { return HasRV64; }
   bool isRV32E() const { return IsRV32E; }
+  bool hasExtVortex() const { return HasExtVortex; }
   bool enableLinkerRelax() const { return EnableLinkerRelax; }
   bool enableRVCHintInstrs() const { return EnableRVCHintInstrs; }
   MVT getXLenVT() const { return XLenVT; }

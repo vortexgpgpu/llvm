@@ -1126,3 +1126,9 @@ include "RISCVInstrInfoA.td"
 include "RISCVInstrInfoF.td"
 include "RISCVInstrInfoD.td"
 include "RISCVInstrInfoC.td"
+
+//===----------------------------------------------------------------------===//
+// Custom extensions
+//===----------------------------------------------------------------------===//
+
+include "RISCVInstrInfoVX.td"
