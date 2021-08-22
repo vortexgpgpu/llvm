@@ -88,10 +88,12 @@ void VortexBranchDivergence::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 void VortexBranchDivergence::initialize(Module &M, const RISCVSubtarget &ST) {
+  tmask_func_ = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_tmask);
+  pred_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_pred);
+  tmc_func_   = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_tmc);
   split_func_ = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_split);
   join_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_join);
 }
-
 
 bool VortexBranchDivergence::runOnFunction(Function &F) {
   const auto &TPC = getAnalysis<TargetPassConfig>();
@@ -111,68 +113,187 @@ bool VortexBranchDivergence::runOnFunction(Function &F) {
 
   this->initialize(*F.getParent(), ST); 
 
+  dbgs() << "*** before changes!\n" << F << "\n";
+
   bool changed = false;
 
   for (auto I = df_begin(&F.getEntryBlock()),
             E = df_end(&F.getEntryBlock()); I != E; ++I) {
-    BasicBlock *BB = *I;
+    auto BB = *I;
 
-    BranchInst *Br = dyn_cast<BranchInst>(BB->getTerminator());
+    auto Br = dyn_cast<BranchInst>(BB->getTerminator());
     if (!Br) {
+      dbgs() << "*** skip no branch: " << BB->getName() << "\n";
       continue;
     }
 
     // only process conditional branches
     if (Br->isUnconditional()) {
-      dbgs() << "*** skip non conditional branch!\n" << *Br << "\n";
+      dbgs() << "*** skip non conditional branch: " << BB->getName() << "\n";
       continue;
     }
 
     // only process divergent branches
     if (DA_->isUniform(Br)) {
-      dbgs() << "*** skip non divergent branch!\n" << *Br << "\n";
+      dbgs() << "*** skip non divergent branch: " << BB->getName() << "\n";
       continue;
     }
     
-    // skip loop header
-    Loop *L = LI_->getLoopFor(BB);
-    if (L && L->getHeader() == BB) {
-      dbgs() << "*** skip loop header branch!\n" << *Br << "\n";
+    auto L = LI_->getLoopFor(BB);
+    if (L && L->isLoopLatch(BB)) {
+      if ( std::find(loops_.begin(), loops_.end(), L) == loops_.end())
+        loops_.push_back(L);
+      dbgs() << "*** divergent loop latch: " << BB->getName() << ", loop=" << L->getHeader()->getName() << "\n";
       continue;
-    }    
-    
+    }
+
     auto succ0 = Br->getSuccessor(0);
     auto succ1 = Br->getSuccessor(1);
     auto ipdom = PDT_->findNearestCommonDominator(succ0, succ1);
-    //dbgs() << "*** succs: BB#" << *succ0 << ", BB#" << *succ1 << "\n";
-    //dbgs() << "*** ipdom: BB#" << *ipdom << "\n";
 
-    IRBuilder<> irbuilder(Br);
-    auto cond_i32 = irbuilder.CreateIntCast(Br->getCondition(), irbuilder.getInt32Ty(), false);
-    CallInst::Create(split_func_, cond_i32, "", Br);
+    splits_.push_back({BB, ipdom});
 
-    // if ipdom is shared with another branch, 
-    // insert new BB before it as unique ipdom
-    if (joins_.count(ipdom)) {      
-      auto &context = F.getContext();
-      auto stub = BasicBlock::Create(context, "ipdom_stub", &F, ipdom);
-      PDT_->addNewBlock(stub, ipdom);
-      ipdom = stub;
-    } else {
-      joins_.insert(ipdom);
-    }
-
-    CallInst::Create(join_func_, "", ipdom->getFirstNonPHI());
+    dbgs() << "*** divergent branch: " << BB->getName() << ", ipdom=" << ipdom->getName() << "\n";
 
     changed = true;
   }
 
   if (changed) {
-    dbgs() << "*** final!\n" << F << "\n";
+    // apply transformation
+    auto &context = F.getContext();    
+    this->processSplitJoins(&context, &F);
+    this->processLoops(&context, &F);
   }
 
+  if (changed) {
+    dbgs() << "*** after changes!\n" << F << "\n";
+  }
+
+  splits_.clear();
+  loops_.clear();
+  stub_blocks_.clear();
+  
   return true;
 }
+
+void VortexBranchDivergence::processSplitJoins(LLVMContext* context, Function* function) {
+  // traverse the list in reverse to handle nested splits first
+  for (auto it = splits_.rbegin(), ite = splits_.rend(); it != ite; ++it) {
+    auto block = it->first;
+    auto ipdom = it->second;
+
+    dbgs() << "*** insert split/join: " << block->getName() << "\n";
+  
+    auto branch = dyn_cast<BranchInst>(block->getTerminator());
+
+    // insert splits before divergent branch    
+    IRBuilder<> ir_builder(branch);
+    auto cond = branch->getCondition();
+    auto cond_i32 = ir_builder.CreateIntCast(cond, ir_builder.getInt32Ty(), false, cond->getName() + ".i32");
+    CallInst::Create(split_func_, cond_i32, "", branch);
+
+    // insert join before ipdom
+    auto stub = BasicBlock::Create(*context, "join_stub", function, ipdom);
+    auto stub_br = BranchInst::Create(ipdom, stub);
+    CallInst::Create(join_func_, "", stub_br);
+
+    this->recurseReplaceSuccessor(block, ipdom, stub);
+    
+    PDT_->addNewBlock(stub, ipdom);
+  }
+}
+
+void VortexBranchDivergence::processLoops(LLVMContext* context, Function* function) {
+  // traverse the list in reverse to handle nested loops first
+   for (auto it = loops_.rbegin(), ite = loops_.rend(); it != ite; ++it) {
+    auto loop = *it;
+
+    auto header = loop->getHeader();
+
+    auto preheader = loop->getLoopPreheader();
+    assert(preheader);
+
+    auto preheader_br = dyn_cast<BranchInst>(preheader->getTerminator());
+    assert(preheader_br);
+
+    dbgs() << "*** process loop: " << header->getName() << "\n";
+
+    BasicBlock* exit_block = NULL;
+    {
+      SmallVector <BasicBlock *, 8> exit_blocks;
+      loop->getUniqueExitBlocks(exit_blocks);
+      for (auto block : exit_blocks) {
+        if (exit_block == NULL) {
+          exit_block = block;
+        } else {
+          exit_block = PDT_->findNearestCommonDominator(exit_block, block);
+        }
+      }
+      assert(exit_block);
+      dbgs() << "****** common loop exit_block: " << exit_block->getName() << "\n";
+   }
+
+    // save current thread mask in preheader
+    auto tmask = CallInst::Create(tmask_func_, "tmask", preheader_br);
+
+    // restore thread mask before exit block
+    auto loop_exit_stub = BasicBlock::Create(*context, "loop_exit_stub", function, exit_block);
+    {      
+      auto loop_exit_stub_br = BranchInst::Create(exit_block, loop_exit_stub);
+      PDT_->addNewBlock(loop_exit_stub, exit_block);      
+      CallInst::Create(tmc_func_, tmask, "", loop_exit_stub_br);            
+    }
+
+    // set predicate mask for each backedge
+    {
+      SmallVector <BasicBlock *, 8> latches;
+      loop->getLoopLatches(latches);
+      for (auto latch : latches) {
+        auto latch_br = dyn_cast<BranchInst>(latch->getTerminator());
+        dbgs() << "****** update loop latch: " << latch->getName() << "\n";
+        if (latch_br && !DA_->isUniform(latch_br)) {
+          IRBuilder<> ir_builder(latch_br);
+          auto cond = latch_br->getCondition();
+          auto not_cond = ir_builder.CreateNot(cond, cond->getName() + ".not");
+          auto not_cond_i32 = ir_builder.CreateIntCast(not_cond, ir_builder.getInt32Ty(), false, not_cond->getName() + ".i32");
+          CallInst::Create(pred_func_, not_cond_i32, "", latch_br);
+          this->recurseReplaceSuccessor(latch, exit_block, loop_exit_stub);
+        }
+      }
+    }
+  }
+}
+
+void VortexBranchDivergence::recurseReplaceSuccessor(BasicBlock* start, 
+                                                     BasicBlock* oldBB, 
+                                                     BasicBlock* newBB) {
+                    
+  stub_blocks_.insert(newBB);
+  DenseSet<const BasicBlock *> visited(stub_blocks_);
+  this->recurseReplaceSuccessor(visited, start, oldBB, newBB);
+}
+
+void VortexBranchDivergence::recurseReplaceSuccessor(DenseSet<const BasicBlock *>& visited, 
+                                                     BasicBlock* start, 
+                                                     BasicBlock* oldBB, 
+                                                     BasicBlock* newBB) {
+  visited.insert(start);
+  auto branch = dyn_cast<BranchInst>(start->getTerminator());
+  if (branch) {
+    for (unsigned i = 0, n = branch->getNumSuccessors(); i < n; ++i) {
+      auto succ = branch->getSuccessor(i);
+      if (succ == oldBB) {
+        dbgs() << "****** replace " << start->getName() << ".succ" << i << ": " << oldBB->getName() << " with " << newBB->getName() << "\n";
+        branch->setSuccessor(i, newBB);
+      } else {        
+        if (visited.count(succ) == 0) {          
+          this->recurseReplaceSuccessor(visited, succ, oldBB, newBB);
+        }      
+      }
+    }
+  }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
 bool isSourceOfDivergenceHandler::eval(const Value *V) {  

@@ -21,12 +21,28 @@ private:
   PostDominatorTree *PDT_;
   LoopInfo *LI_;
 
-  DenseSet<const BasicBlock *> joins_;
-  
+  std::vector<std::pair<BasicBlock *, BasicBlock*>> splits_;
+  std::vector<Loop *> loops_;
+  DenseSet<const BasicBlock *> stub_blocks_;
+
+  Function *tmask_func_;
+  Function *pred_func_;
+  Function *tmc_func_;  
   Function *split_func_;
   Function *join_func_;
 
   void initialize(Module &M, const RISCVSubtarget &ST);
+
+  void processSplitJoins(LLVMContext* context, Function* function);
+
+  void processLoops(LLVMContext* context, Function* function);
+
+  void recurseReplaceSuccessor(BasicBlock* start, BasicBlock* oldBB, BasicBlock* newBB);
+
+  void recurseReplaceSuccessor(DenseSet<const BasicBlock *>& visited, 
+                               BasicBlock* start, 
+                               BasicBlock* oldBB, 
+                               BasicBlock* newBB);
 
 public:
 
