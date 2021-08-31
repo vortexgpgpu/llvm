@@ -46,8 +46,6 @@ void initializeRISCVExpandPseudoPass(PassRegistry &);
 InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
                                                     RISCVSubtarget &,
                                                     RISCVRegisterBankInfo &);
-// Vortex extension passes
-FunctionPass *createVortexBranchDivergencePass();
 
 }
 

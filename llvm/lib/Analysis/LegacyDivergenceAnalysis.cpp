@@ -131,12 +131,18 @@ void DivergencePropagator::populateWithSourcesOfDivergence() {
   DU.clear();
   for (auto &I : instructions(F)) {
     if (TTI.isSourceOfDivergence(&I)) {
+      dbgs() << "*** Divergent Instruction: ";
+      I.print(dbgs());
+      dbgs() << "\n";
       Worklist.push_back(&I);
       DV.insert(&I);
     }
   }
   for (auto &Arg : F.args()) {
     if (TTI.isSourceOfDivergence(&Arg)) {
+      dbgs() << "*** Divergent Argument: ";
+      Arg.print(dbgs());      
+      dbgs() << "\n";
       Worklist.push_back(&Arg);
       DV.insert(&Arg);
     }

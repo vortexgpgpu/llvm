@@ -35,6 +35,12 @@
 #include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 using namespace llvm;
 
+// Vortex extension passes
+namespace llvm {
+FunctionPass *createVortexBranchDivergence1Pass();
+FunctionPass *createVortexBranchDivergence2Pass();
+}
+
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   RegisterTargetMachine<RISCVTargetMachine> X(getTheRISCV32Target());
   RegisterTargetMachine<RISCVTargetMachine> Y(getTheRISCV64Target());
@@ -196,7 +202,8 @@ bool RISCVPassConfig::addPreISel() {
     addPass(createFlattenCFGPass());
     addPass(createUnifyFunctionExitNodesPass());
     //addPass(createStructurizeCFGPass());
-    addPass(createVortexBranchDivergencePass());  
+    addPass(createVortexBranchDivergence1Pass());
+    addPass(createVortexBranchDivergence2Pass());
   }
   return false;
 }
