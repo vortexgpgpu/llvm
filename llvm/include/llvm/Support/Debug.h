@@ -32,7 +32,6 @@ namespace llvm {
 
 class raw_ostream;
 
-#undef NDEBUG
 #ifndef NDEBUG
 
 /// isCurrentDebugType - Return true if the specified string is the debug type

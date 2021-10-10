@@ -1,6 +1,3 @@
-
-string( REPLACE "/DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
-
 add_subdirectory(IR)
 add_subdirectory(Support)
 
