@@ -33,15 +33,17 @@ class RISCVTTIImpl : public BasicTTIImplBase<RISCVTTIImpl> {
 
   const RISCVSubtarget *ST;
   const RISCVTargetLowering *TLI;
-  vortex::isSourceOfDivergenceHandler vx_sdh_; 
+  vortex::DivergenceTracker divergence_tracker_; 
 
   const RISCVSubtarget *getST() const { return ST; }
   const RISCVTargetLowering *getTLI() const { return TLI; }
 
 public:
   explicit RISCVTTIImpl(const RISCVTargetMachine *TM, const Function &F)
-      : BaseT(TM, F.getParent()->getDataLayout()), ST(TM->getSubtargetImpl(F)),
-        TLI(ST->getTargetLowering()) {}
+      : BaseT(TM, F.getParent()->getDataLayout()), ST(TM->getSubtargetImpl(F))
+      , TLI(ST->getTargetLowering())
+      , divergence_tracker_(F)
+    {}
 
   int getIntImmCost(const APInt &Imm, Type *Ty);
   int getIntImmCostInst(unsigned Opcode, unsigned Idx, const APInt &Imm, Type *Ty);

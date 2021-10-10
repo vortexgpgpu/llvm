@@ -38,9 +38,6 @@ using namespace vortex;
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
-// CSR thread Id
-#define CSR_WTID 0xCC0
-
 #define DEBUG_TYPE "vortex-branch-divergence"
 
 static cl::opt<bool> RelaxedUniformRegions(
@@ -1081,7 +1078,7 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
     auto region = RQ.back();      
     if (isDivergentLoopRegion(region, LI, DA, DT, PDT)) {
       dbgs() << "*** structurize region: " << region->getNameStr() << "\n";
-      region->dump();
+      LLVM_DEBUG(region->dump());
       changed |= SCFG->runOnRegion(region);
     } else {
       dbgs() << "*** skip region: " << region->getNameStr() << "\n";
@@ -1166,8 +1163,8 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
     }
 
     // only process divergent branches
-    if (DV_.count(Br) != 0) {
-      dbgs() << "*** skip non-divergent branch: " << BB->getName() << "\n";
+    if (DA_->isUniform(Br)) {
+      dbgs() << "*** skip uniform branch: " << BB->getName() << "\n";
       continue;
     }
 
@@ -1223,7 +1220,7 @@ void VortexBranchDivergence2::processBranches(LLVMContext* context, Function* fu
       CallInst::Create(split_func_, cond_i32, "", branch);
 
       // insert join before ipdom
-      dbgs() << "*** insert join at: " << ipdom->getName() << "\n";     
+      dbgs() << "*** insert join at: " << ipdom->getName() << "\n";
       auto stub = BasicBlock::Create(*context, "join_stub", function, ipdom);
       auto stub_br = BranchInst::Create(ipdom, stub);
       CallInst::Create(join_func_, "", stub_br);
@@ -1356,7 +1353,68 @@ void VortexBranchDivergence2::replacePhiDefs(BasicBlock* block,
 
 ///////////////////////////////////////////////////////////////////////////////
 
-bool isSourceOfDivergenceHandler::eval(const Value *V) {  
+DivergenceTracker::DivergenceTracker(const Function &function) {
+  /*
+  auto module = function.getParent();
+  auto global_annos = module->getNamedGlobal("llvm.global.annotations");
+  if (global_annos) {
+    auto ca = cast<ConstantArray>(global_annos->getOperand(0));
+    for (unsigned i = 0; i < ca->getNumOperands(); ++i) {
+      auto cs  = cast<ConstantStruct>(ca->getOperand(i));
+      auto gv  = dyn_cast<GlobalVariable>(cs->getOperand(1)->getOperand(0));
+      auto cda = dyn_cast<ConstantDataArray>(gv->getInitializer());
+      if (cda->getAsCString() == "divergent") { 
+        auto var = cs->getOperand(0)->getOperand(0);
+        dbgs() << "*** divergent annotation: ";
+        var->print(dbgs());
+        dbgs() << "\n";
+        DV_.insert(var); 
+      }
+    }
+  }
+  */
+
+  for (auto& BB : function) {
+    for (auto& I : BB) {
+      if (auto II = dyn_cast<llvm::IntrinsicInst>(&I)) {
+        if (II->getIntrinsicID() == llvm::Intrinsic::var_annotation) {          
+          auto gep = dyn_cast<ConstantExpr>(II->getOperand(1));
+          auto gv  = dyn_cast<GlobalVariable>(gep->getOperand(0));
+          auto cda = dyn_cast<ConstantDataArray>(gv->getInitializer());
+          if (cda->getAsCString() == "divergent") {
+            auto var = II->getOperand(0);
+            auto AI = dyn_cast<AllocaInst>(var);
+            if (AI) {
+              DV_.insert(var);
+            } else {
+              if (auto CI = dyn_cast<CastInst>(var)) {
+                auto var2 = CI->getOperand(0);
+                DV_.insert(var2);
+              }
+            }
+            /*dbgs() << "*** divergent annotation: ";
+            var->print(dbgs());
+            dbgs() << "\n";*/            
+          }
+        }
+      }
+    }
+  }
+}
+
+bool DivergenceTracker::eval(const Value *V) {  
+  if (DV_.count(V) != 0)
+    return true;
+
+  if (auto I = dyn_cast<Instruction>(V)) {
+    if (I->getMetadata("vortex.divergent") != NULL) {
+      /*dbgs() << "*** divergent metadata: ";
+      V->print(dbgs());
+      dbgs() << "\n";*/
+      return true;
+    }
+  }
+
   if (isa<AtomicRMWInst>(V) 
    || isa<AtomicCmpXchgInst>(V)) {
     // Atomics are divergent because they are executed sequentially: when an
@@ -1364,32 +1422,7 @@ bool isSourceOfDivergenceHandler::eval(const Value *V) {
     // thread after the first sees the value written by the previous thread as
     // original value.
     return true;  
-  } else 
-  if (auto CI = dyn_cast<CallInst>(V)) {
-    // CSR instruction WTID generates a thread divergent value
-    if (!CI->isInlineAsm())
-      return false;
-
-    auto CV = CI->getCalledValue();
-    if (const InlineAsm *IA = dyn_cast<InlineAsm>(CV)) {
-      auto& asm_str = IA->getAsmString();
-      if (asm_str.substr(0, 4) == "csrr") {
-        auto AO = CI->getArgOperand(0);
-        if (const ConstantInt *C = dyn_cast<ConstantInt>(AO)) {
-          if (C->getValue() == CSR_WTID) {
-            dbgs() << "*** CSR_WTID read: ";
-            V->print(dbgs());
-            dbgs() << "\n";
-            DV_.insert(V);
-            return true;
-          }
-        }        
-      }
-    }
-    
-    return false;
-  } else 
-  if (auto ST = dyn_cast<StoreInst>(V)) {        
+  } else if (auto ST = dyn_cast<StoreInst>(V)) {        
     // track stores for divergent stack values
     auto addr = ST->getPointerOperand();
     if (dyn_cast<AllocaInst>(addr) != NULL) {
@@ -1398,8 +1431,7 @@ bool isSourceOfDivergenceHandler::eval(const Value *V) {
         DV_.insert(addr);
       }
     }
-  } else  
-  if (auto LD = dyn_cast<LoadInst>(V)) {        
+  } else if (auto LD = dyn_cast<LoadInst>(V)) {        
     // loads from divergent stack values are divergent
     auto addr = LD->getPointerOperand();
     if (dyn_cast<AllocaInst>(addr) != NULL) {

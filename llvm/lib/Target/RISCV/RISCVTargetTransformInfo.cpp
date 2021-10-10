@@ -93,5 +93,5 @@ int RISCVTTIImpl::getIntImmCostIntrin(Intrinsic::ID IID, unsigned Idx,
 }
 
 bool RISCVTTIImpl::isSourceOfDivergence(const Value *V) {
-  return vx_sdh_.eval(V);
+  return divergence_tracker_.eval(V);
 }

@@ -4,11 +4,13 @@
 namespace vortex {
 using namespace llvm;
 
-class isSourceOfDivergenceHandler {
+class DivergenceTracker {
 private:
     DenseSet<const Value *> DV_;
 
 public:
+    DivergenceTracker(const Function &function);
+
     bool eval(const Value *V);
 };
 

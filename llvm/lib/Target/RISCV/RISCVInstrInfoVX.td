@@ -1,6 +1,6 @@
 // Vortex instructions definitions
 
-def OPC_VORTEX : RISCVOpcode<0b0000110>;
+def OPC_VORTEX : RISCVOpcode<0b1101011>;
 
 let hasSideEffects = 1, mayStore = 1 , mayLoad = 1 in {
 
