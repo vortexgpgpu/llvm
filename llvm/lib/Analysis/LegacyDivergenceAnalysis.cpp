@@ -131,7 +131,7 @@ void DivergencePropagator::populateWithSourcesOfDivergence() {
   DU.clear();
   for (auto &I : instructions(F)) {
     if (TTI.isSourceOfDivergence(&I)) {
-      dbgs() << "*** Divergent Instruction: ";
+      dbgs() << "*** divergent instruction: ";
       I.print(dbgs());
       dbgs() << "\n";
       Worklist.push_back(&I);
@@ -140,7 +140,7 @@ void DivergencePropagator::populateWithSourcesOfDivergence() {
   }
   for (auto &Arg : F.args()) {
     if (TTI.isSourceOfDivergence(&Arg)) {
-      dbgs() << "*** Divergent Argument: ";
+      dbgs() << "*** divergent function argument: ";
       Arg.print(dbgs());      
       dbgs() << "\n";
       Worklist.push_back(&Arg);
@@ -178,8 +178,12 @@ void DivergencePropagator::exploreSyncDependency(Instruction *TI) {
   for (auto I = IPostDom->begin(); isa<PHINode>(I); ++I) {
     // A PHINode is uniform if it returns the same value no matter which path is
     // taken.
-    if (!cast<PHINode>(I)->hasConstantOrUndefValue() && DV.insert(&*I).second)
+    if (!cast<PHINode>(I)->hasConstantOrUndefValue() && DV.insert(&*I).second) {
+      dbgs() << "*** divergent sync dependency: ";
+      I->print(dbgs());
+      dbgs() << "\n";
       Worklist.push_back(&*I);
+    }
   }
 
   // Propagation rule 2: if a value defined in a loop is used outside, the user
@@ -226,8 +230,12 @@ void DivergencePropagator::findUsersOutsideInfluenceRegion(
     Instruction *UserInst = cast<Instruction>(Use.getUser());
     if (!InfluenceRegion.count(UserInst->getParent())) {
       DU.insert(&Use);
-      if (DV.insert(UserInst).second)
+      if (DV.insert(UserInst).second) {
+        dbgs() << "*** divergent sync dependency: ";
+        UserInst->print(dbgs());
+        dbgs() << "\n";
         Worklist.push_back(UserInst);
+      }
     }
   }
 }
@@ -265,8 +273,38 @@ void DivergencePropagator::computeInfluenceRegion(
 void DivergencePropagator::exploreDataDependency(Value *V) {
   // Follow def-use chains of V.
   for (User *U : V->users()) {
-    if (!TTI.isAlwaysUniform(U) && DV.insert(U).second)
+    if (!TTI.isAlwaysUniform(U) && DV.insert(U).second) {
+      dbgs() << "*** divergent data dependency: ";
+      U->print(dbgs());
+      dbgs() << "\n";
       Worklist.push_back(U);
+    } else {
+      // Handle divergent stack stores
+      // If the value diverge, also mark the address as divergent,
+      // such that loads from that address will also be divergent
+      if (auto ST = dyn_cast<StoreInst>(U)) {        
+        auto value = ST->getValueOperand();
+        if (value == V) {
+          auto addr = ST->getPointerOperand();   
+          if (dyn_cast<AllocaInst>(addr) != NULL) {                    
+            dbgs() << "*** divergent stack store: ";
+            ST->print(dbgs());
+            dbgs() << "\n";
+            // mark loads using this address as divergent
+            for (User *U2 : addr->users()) {
+              if (auto LD = dyn_cast<LoadInst>(U2)) {  
+                if (addr == LD->getPointerOperand()) {
+                  dbgs() << "*** divergent stack load: ";
+                  LD->print(dbgs());
+                  dbgs() << "\n";
+                  Worklist.push_back(LD);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }
 

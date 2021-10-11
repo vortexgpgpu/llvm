@@ -14,6 +14,10 @@ def VX_PRED : RVInstS<0, OPC_VORTEX, (outs), (ins GPR:$rs1), "vx_pred", "$rs1">,
     let imm12 = 0;
 }
 
+def VX_WSPAWN : RVInstS<1, OPC_VORTEX, (outs), (ins GPR:$rs1, GPR:$rs2), "vx_wspawn", "$rs1, $rs2">, Sched<[]> {    
+    let imm12 = 0;
+}
+
 def VX_SPLIT : RVInstS<2, OPC_VORTEX, (outs), (ins GPR:$rs1), "vx_split", "$rs1">, Sched<[]> {
     let rs2   = 0;
     let imm12 = 0;
@@ -24,6 +28,17 @@ def VX_JOIN : RVInstS<3, OPC_VORTEX, (outs), (ins), "vx_join", "">, Sched<[]> {
     let rs2   = 0;
     let imm12 = 0;
 }
+
+def VX_BARRIER : RVInstS<4, OPC_VORTEX, (outs), (ins GPR:$rs1, GPR:$rs2), "vx_bar", "$rs1, $rs2">, Sched<[]> {    
+    let imm12 = 0;
+}
+
+def VX_TEX : RVInstR4<5, OPC_VORTEX, (outs GPR:$rd),
+               (ins GPR:$rs1, GPR:$rs2, GPR:$rs3, frmarg:$funct3),
+                "vx_tex", "$rd, $rs1, $rs2, $rs3, $funct3">, Sched<[]> {  
+    
+}
+
 }
 
 def CSR_TMASK : SysReg<"tmask", 0xCC4>;

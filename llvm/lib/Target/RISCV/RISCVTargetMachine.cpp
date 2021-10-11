@@ -47,6 +47,8 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   auto PR = PassRegistry::getPassRegistry();
   initializeGlobalISel(*PR);
   initializeRISCVExpandPseudoPass(*PR);
+  initializeVortexBranchDivergence1Pass(*PR);
+  initializeVortexBranchDivergence2Pass(*PR);
 }
 
 static StringRef computeDataLayout(const Triple &TT) {

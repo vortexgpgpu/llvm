@@ -1052,7 +1052,7 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
   if (!ST.hasExtVortex())
     return false;
 
-  dbgs() << "*** Vortex Divergent Branch Annotation ***\n";  
+  dbgs() << "*** Vortex Divergent Branch Handling Pass1 ***\n";  
 
   auto *TTIWP = getAnalysisIfAvailable<TargetTransformInfoWrapperPass>();
   if (TTIWP == nullptr)
@@ -1132,7 +1132,7 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
   if (!ST.hasExtVortex())
     return false;
 
-  dbgs() << "*** Vortex Divergent Branch Annotation ***\n";  
+  dbgs() << "*** Vortex Divergent Branch Handling Pass2 ***\n";  
 
   this->initialize(*F.getParent(), ST);
 
@@ -1373,9 +1373,14 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
     }
   }
   */
-
   for (auto& BB : function) {
     for (auto& I : BB) {
+      if (I.getMetadata("vortex.divergent") != NULL) {
+        DV_.insert(&I);
+        /*dbgs() << "*** divergent metadata: ";
+        I.print(dbgs());
+        dbgs() << "\n";*/
+      } else
       if (auto II = dyn_cast<llvm::IntrinsicInst>(&I)) {
         if (II->getIntrinsicID() == llvm::Intrinsic::var_annotation) {          
           auto gep = dyn_cast<ConstantExpr>(II->getOperand(1));
@@ -1386,15 +1391,18 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
             auto AI = dyn_cast<AllocaInst>(var);
             if (AI) {
               DV_.insert(var);
+              /*dbgs() << "*** divergent annotation: ";
+              var->print(dbgs());
+              dbgs() << "\n";*/
             } else {
               if (auto CI = dyn_cast<CastInst>(var)) {
                 auto var2 = CI->getOperand(0);
                 DV_.insert(var2);
+                /*dbgs() << "*** divergent annotation: ";
+                var2->print(dbgs());
+                dbgs() << "\n";*/
               }
-            }
-            /*dbgs() << "*** divergent annotation: ";
-            var->print(dbgs());
-            dbgs() << "\n";*/            
+            }            
           }
         }
       }
@@ -1405,16 +1413,7 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
 bool DivergenceTracker::eval(const Value *V) {  
   if (DV_.count(V) != 0)
     return true;
-
-  if (auto I = dyn_cast<Instruction>(V)) {
-    if (I->getMetadata("vortex.divergent") != NULL) {
-      /*dbgs() << "*** divergent metadata: ";
-      V->print(dbgs());
-      dbgs() << "\n";*/
-      return true;
-    }
-  }
-
+  
   if (isa<AtomicRMWInst>(V) 
    || isa<AtomicCmpXchgInst>(V)) {
     // Atomics are divergent because they are executed sequentially: when an
@@ -1422,24 +1421,6 @@ bool DivergenceTracker::eval(const Value *V) {
     // thread after the first sees the value written by the previous thread as
     // original value.
     return true;  
-  } else if (auto ST = dyn_cast<StoreInst>(V)) {        
-    // track stores for divergent stack values
-    auto addr = ST->getPointerOperand();
-    if (dyn_cast<AllocaInst>(addr) != NULL) {
-      auto value = ST->getValueOperand();
-      if (DV_.count(value)) {
-        DV_.insert(addr);
-      }
-    }
-  } else if (auto LD = dyn_cast<LoadInst>(V)) {        
-    // loads from divergent stack values are divergent
-    auto addr = LD->getPointerOperand();
-    if (dyn_cast<AllocaInst>(addr) != NULL) {
-      if (DV_.count(addr)) {
-        DV_.insert(V);
-        return true;
-      }
-    }
   }
 
   return false;
