@@ -1354,8 +1354,7 @@ void VortexBranchDivergence2::replacePhiDefs(BasicBlock* block,
 ///////////////////////////////////////////////////////////////////////////////
 
 DivergenceTracker::DivergenceTracker(const Function &function) {
-  /*
-  auto module = function.getParent();
+  /*auto module = function.getParent();
   auto global_annos = module->getNamedGlobal("llvm.global.annotations");
   if (global_annos) {
     auto ca = cast<ConstantArray>(global_annos->getOperand(0));
@@ -1365,21 +1364,21 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
       auto cda = dyn_cast<ConstantDataArray>(gv->getInitializer());
       if (cda->getAsCString() == "divergent") { 
         auto var = cs->getOperand(0)->getOperand(0);
-        dbgs() << "*** divergent annotation: ";
+        dbgs() << "*** divergent global annotation: value" << var->getValueID() << " = ";
         var->print(dbgs());
         dbgs() << "\n";
-        DV_.insert(var); 
+        annotations_.insert(var); 
       }
     }
-  }
-  */
+  }*/
+  
   for (auto& BB : function) {
     for (auto& I : BB) {
       if (I.getMetadata("vortex.divergent") != NULL) {
-        DV_.insert(&I);
-        /*dbgs() << "*** divergent metadata: ";
+        annotations_.insert(&I);
+        dbgs() << "*** divergent metadata: value" << I.getValueID() << " = ";
         I.print(dbgs());
-        dbgs() << "\n";*/
+        dbgs() << "\n";
       } else
       if (auto II = dyn_cast<llvm::IntrinsicInst>(&I)) {
         if (II->getIntrinsicID() == llvm::Intrinsic::var_annotation) {          
@@ -1388,24 +1387,43 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
           auto cda = dyn_cast<ConstantDataArray>(gv->getInitializer());
           if (cda->getAsCString() == "divergent") {
             auto var = II->getOperand(0);
-            auto AI = dyn_cast<AllocaInst>(var);
-            if (AI) {
-              DV_.insert(var);
-              /*dbgs() << "*** divergent annotation: ";
+            if (auto AI = dyn_cast<AllocaInst>(var)) {
+              annotations_.insert(var);
+              dbgs() << "*** divergent alloc intrinsic: value" << var->getValueID() << " = ";
               var->print(dbgs());
-              dbgs() << "\n";*/
-            } else {
-              if (auto CI = dyn_cast<CastInst>(var)) {
-                auto var2 = CI->getOperand(0);
-                DV_.insert(var2);
-                /*dbgs() << "*** divergent annotation: ";
-                var2->print(dbgs());
-                dbgs() << "\n";*/
-              }
-            }            
+              dbgs() << "\n";
+            } else 
+            if (auto CI = dyn_cast<CastInst>(var)) {
+              auto var2 = CI->getOperand(0);              
+              annotations_.insert(var2);
+              dbgs() << "*** divergent cast intrinsic: value" << var2->getValueID() << " = ";
+              var2->print(dbgs());
+              dbgs() << "\n";
+            }                        
           }
         }
-      }
+      } else 
+      if (auto SI = dyn_cast<StoreInst>(&I)) {
+        auto addr = SI->getPointerOperand();   
+        if (annotations_.count(addr) != 0) {
+          auto value = SI->getValueOperand();
+          if (auto CI = dyn_cast<CastInst>(value)) {  
+            auto src = CI->getOperand(0);
+            dbgs() << "*** divergent annotation store: value" << src->getValueID() << " -> [value" << addr->getValueID() << "]\n";
+            DV_.insert(src);
+          } else {
+            dbgs() << "*** divergent annotation store: value" << value->getValueID() << " -> [value" << addr->getValueID() << "]\n";
+            DV_.insert(value);
+          }
+        }
+      } else 
+      if (auto LI = dyn_cast<LoadInst>(&I)) {
+        auto addr = LI->getPointerOperand();   
+        if (annotations_.count(addr) != 0) {
+          dbgs() << "*** divergent annotation load: [value" << addr->getValueID() << "] -> value" << I.getValueID() << "\n";
+          DV_.insert(&I);
+        }
+      }     
     }
   }
 }

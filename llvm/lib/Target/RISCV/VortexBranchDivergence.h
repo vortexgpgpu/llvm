@@ -6,6 +6,7 @@ using namespace llvm;
 
 class DivergenceTracker {
 private:
+    DenseSet<const Value *> annotations_;
     DenseSet<const Value *> DV_;
 
 public:

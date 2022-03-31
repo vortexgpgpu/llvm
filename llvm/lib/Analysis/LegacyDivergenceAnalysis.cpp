@@ -129,18 +129,20 @@ void DivergencePropagator::populateWithSourcesOfDivergence() {
   Worklist.clear();
   DV.clear();
   DU.clear();
+
   for (auto &I : instructions(F)) {
     if (TTI.isSourceOfDivergence(&I)) {
-      dbgs() << "*** divergent instruction: ";
+      dbgs() << "*** divergent instruction: value" << I.getValueID() << " = ";
       I.print(dbgs());
       dbgs() << "\n";
       Worklist.push_back(&I);
       DV.insert(&I);
     }
   }
+
   for (auto &Arg : F.args()) {
     if (TTI.isSourceOfDivergence(&Arg)) {
-      dbgs() << "*** divergent function argument: ";
+      dbgs() << "*** divergent function argument: value" << Arg.getValueID() << " = ";
       Arg.print(dbgs());      
       dbgs() << "\n";
       Worklist.push_back(&Arg);
@@ -179,7 +181,7 @@ void DivergencePropagator::exploreSyncDependency(Instruction *TI) {
     // A PHINode is uniform if it returns the same value no matter which path is
     // taken.
     if (!cast<PHINode>(I)->hasConstantOrUndefValue() && DV.insert(&*I).second) {
-      dbgs() << "*** divergent sync dependency: ";
+      dbgs() << "*** divergent sync dependency: value" << I->getValueID() << " = ";
       I->print(dbgs());
       dbgs() << "\n";
       Worklist.push_back(&*I);
@@ -231,7 +233,7 @@ void DivergencePropagator::findUsersOutsideInfluenceRegion(
     if (!InfluenceRegion.count(UserInst->getParent())) {
       DU.insert(&Use);
       if (DV.insert(UserInst).second) {
-        dbgs() << "*** divergent sync dependency: ";
+        dbgs() << "*** divergent sync dependency: value" << UserInst->getValueID() << " = ";
         UserInst->print(dbgs());
         dbgs() << "\n";
         Worklist.push_back(UserInst);
@@ -274,7 +276,7 @@ void DivergencePropagator::exploreDataDependency(Value *V) {
   // Follow def-use chains of V.
   for (User *U : V->users()) {
     if (!TTI.isAlwaysUniform(U) && DV.insert(U).second) {
-      dbgs() << "*** divergent data dependency: ";
+      dbgs() << "*** divergent data dependency: value" << U->getValueID() << " = ";
       U->print(dbgs());
       dbgs() << "\n";
       Worklist.push_back(U);
@@ -294,7 +296,7 @@ void DivergencePropagator::exploreDataDependency(Value *V) {
             for (User *U2 : addr->users()) {
               if (auto LD = dyn_cast<LoadInst>(U2)) {  
                 if (addr == LD->getPointerOperand()) {
-                  dbgs() << "*** divergent stack load: ";
+                  dbgs() << "*** divergent stack load: value" << LD->getValueID() << " = ";
                   LD->print(dbgs());
                   dbgs() << "\n";
                   Worklist.push_back(LD);
