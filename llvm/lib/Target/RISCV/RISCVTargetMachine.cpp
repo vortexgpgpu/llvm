@@ -129,8 +129,11 @@ class RISCVPassConfig : public TargetPassConfig {
     bool isVortex_;
 public:
   RISCVPassConfig(RISCVTargetMachine &TM, PassManagerBase &PM)
-      : TargetPassConfig(TM, PM) {
-    isVortex_ = TM.isVortex();
+      : TargetPassConfig(TM, PM)
+      , isVortex_(false) {
+    if (TM.isVortex()) {
+      isVortex_ = true;
+    }
   }
 
   RISCVTargetMachine &getRISCVTargetMachine() const {

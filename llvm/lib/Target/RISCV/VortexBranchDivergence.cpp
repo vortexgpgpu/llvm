@@ -27,6 +27,7 @@
 
 #include "llvm/Analysis/LegacyDivergenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/RegionIterator.h"
@@ -914,12 +915,13 @@ private:
 
   void processLoops(LLVMContext* context, Function* function);
 
-  void recurseReplaceSuccessor(BasicBlock* start, BasicBlock* oldBB, BasicBlock* newBB);
+  void recurseReplaceSuccessor(BasicBlock* pred, BasicBlock* oldBB, BasicBlock* newBB, bool recurse);
 
   void recurseReplaceSuccessor(DenseSet<const BasicBlock *>& visited, 
-                               BasicBlock* block, 
+                               BasicBlock* pred, 
                                BasicBlock* oldBB, 
-                               BasicBlock* newBB);
+                               BasicBlock* newBB,
+                               bool recurse);
 
   void replacePhiDefs(BasicBlock* block, BasicBlock* oldBB, BasicBlock* newBB);
 
@@ -958,8 +960,9 @@ FunctionPass *createVortexBranchDivergence2Pass() {
 
 INITIALIZE_PASS_BEGIN(VortexBranchDivergence1, "vortex-branch-divergence-1",
                       "Vortex Branch Divergence (1) Handling", false, false)
-INITIALIZE_PASS_DEPENDENCY(RegionInfoPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
+INITIALIZE_PASS_DEPENDENCY(RegionInfoPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(PostDominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LegacyDivergenceAnalysis)
@@ -970,8 +973,9 @@ INITIALIZE_PASS_END(VortexBranchDivergence1, "vortex-branch-divergence-1",
 
 INITIALIZE_PASS_BEGIN(VortexBranchDivergence2, "vortex-branch-divergence-2",
                       "Vortex Branch Divergence (2) Handling", false, false)
-INITIALIZE_PASS_DEPENDENCY(RegionInfoPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
+INITIALIZE_PASS_DEPENDENCY(RegionInfoPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(PostDominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LegacyDivergenceAnalysis)
@@ -1034,8 +1038,9 @@ StringRef VortexBranchDivergence1::getPassName() const {
 }
 
 void VortexBranchDivergence1::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.addRequired<LoopInfoWrapperPass>();  
+  AU.addRequiredID(LoopSimplifyID);
   AU.addRequired<RegionInfoPass>();
-  AU.addRequired<LoopInfoWrapperPass>();
   AU.addRequired<DominatorTreeWrapperPass>();
   AU.addRequired<PostDominatorTreeWrapperPass>();
   AU.addRequired<LegacyDivergenceAnalysis>();
@@ -1105,9 +1110,10 @@ StringRef VortexBranchDivergence2::getPassName() const {
   return "Vortex Handle Branch Divergence (2)";
 }
 
-void VortexBranchDivergence2::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.addRequired<RegionInfoPass>();
+void VortexBranchDivergence2::getAnalysisUsage(AnalysisUsage &AU) const {  
   AU.addRequired<LoopInfoWrapperPass>();
+  AU.addRequiredID(LoopSimplifyID);
+  AU.addRequired<RegionInfoPass>();
   AU.addRequired<DominatorTreeWrapperPass>();
   AU.addRequired<PostDominatorTreeWrapperPass>();
   AU.addRequired<LegacyDivergenceAnalysis>();
@@ -1224,7 +1230,7 @@ void VortexBranchDivergence2::processBranches(LLVMContext* context, Function* fu
       auto stub = BasicBlock::Create(*context, "join_stub", function, ipdom);
       auto stub_br = BranchInst::Create(ipdom, stub);
       CallInst::Create(join_func_, "", stub_br);
-      this->recurseReplaceSuccessor(block, ipdom, stub);
+      this->recurseReplaceSuccessor(block, ipdom, stub, true);
       
       PDT_->addNewBlock(stub, ipdom);
     } else {
@@ -1249,68 +1255,68 @@ void VortexBranchDivergence2::processLoops(LLVMContext* context, Function* funct
     auto preheader = loop->getLoopPreheader();
     assert(preheader);
 
-    auto preheader_br = dyn_cast<BranchInst>(preheader->getTerminator());
+    auto preheader_term = preheader->getTerminator();
+    assert(preheader_term);
+
+    auto preheader_br = dyn_cast<BranchInst>(preheader_term);
     assert(preheader_br);
 
     dbgs() << "*** process loop: " << header->getName() << "\n";  
 
     // save current thread mask in preheader
-    dbgs() << "****** backup loop's tmask at: " << preheader_br->getName() << "\n";
+    dbgs() << "****** backup loop's tmask at preheader: " << preheader->getName() << "\n";
     auto tmask = CallInst::Create(tmask_func_, "tmask", preheader_br);
     
-    // find the loop's ipdom
-    BasicBlock* ipdom = NULL;
+    // restore thread mask at loop exit blocks
     {
+      SmallVector <BasicBlock *, 8> exiting_blocks;
+      loop->getExitingBlocks(exiting_blocks);
+
       SmallVector <BasicBlock *, 8> exit_blocks;
       loop->getUniqueExitBlocks(exit_blocks);
-      for (auto block : exit_blocks) {
-        dbgs() << "****** loop's exit block: " << block->getName() << "\n";
-        if (ipdom == NULL) {
-          ipdom = block;
-        } else {          
-          ipdom = PDT_->findNearestCommonDominator(ipdom, block);
+
+      for (auto exit_block : exit_blocks) {
+        dbgs() << "****** restore loop's tmask at exit block: " << exit_block->getName() << "\n";
+        auto loop_exit_stub = BasicBlock::Create(*context, "loop_exit_stub", function, exit_block);
+        auto loop_exit_stub_br = BranchInst::Create(exit_block, loop_exit_stub);
+        PDT_->addNewBlock(loop_exit_stub, exit_block);
+        CallInst::Create(tmc_func_, tmask, "", loop_exit_stub_br);   
+        for (auto exiting_block : exiting_blocks) {
+          this->recurseReplaceSuccessor(exiting_block, exit_block, loop_exit_stub, false);
         }
       }      
-    }
-
-    // restore thread mask before loop's ipdom
-    {
-      dbgs() << "****** restore loop's tmask at: " << ipdom->getName() << "\n";
-      auto loop_exit_stub = BasicBlock::Create(*context, "loop_exit_stub", function, ipdom);
-      auto loop_exit_stub_br = BranchInst::Create(ipdom, loop_exit_stub);
-      PDT_->addNewBlock(loop_exit_stub, ipdom);      
-      CallInst::Create(tmc_func_, tmask, "", loop_exit_stub_br);      
-      this->recurseReplaceSuccessor(header, ipdom, loop_exit_stub);         
     }
   }
 }
 
-void VortexBranchDivergence2::recurseReplaceSuccessor(BasicBlock* start, 
+void VortexBranchDivergence2::recurseReplaceSuccessor(BasicBlock* pred, 
                                                       BasicBlock* oldBB, 
-                                                      BasicBlock* newBB) {                    
+                                                      BasicBlock* newBB,
+                                                      bool recurse) {                    
   DenseSet<const BasicBlock *> visited;
-  this->recurseReplaceSuccessor(visited, start, oldBB, newBB);
+  this->recurseReplaceSuccessor(visited, pred, oldBB, newBB, recurse);
 }
 
 void VortexBranchDivergence2::recurseReplaceSuccessor(DenseSet<const BasicBlock *>& visited, 
-                                                      BasicBlock* block, 
+                                                      BasicBlock* pred, 
                                                       BasicBlock* oldBB, 
-                                                      BasicBlock* newBB) {
-  visited.insert(block);
-  auto branch = dyn_cast<BranchInst>(block->getTerminator());
+                                                      BasicBlock* newBB,
+                                                      bool recurse) {
+  visited.insert(pred);
+  auto branch = dyn_cast<BranchInst>(pred->getTerminator());
   if (branch) {
     for (unsigned i = 0, n = branch->getNumSuccessors(); i < n; ++i) {
       auto succ = branch->getSuccessor(i);
       if (succ == oldBB) {
-        dbgs() << "****** replace " << block->getName() << ".succ" << i << ": " << oldBB->getName() << " with " << newBB->getName() << "\n";
+        dbgs() << "****** replace " << pred->getName() << ".succ[" << i << "]: " << oldBB->getName() << " with " << newBB->getName() << "\n";
         branch->setSuccessor(i, newBB);
-        this->replacePhiDefs(oldBB, block, newBB);
+        this->replacePhiDefs(oldBB, pred, newBB);
         //dbgs() << *block;
         //dbgs() << *newBB;
         //dbgs() << *oldBB;
       } else {        
-        if (visited.count(succ) == 0) {          
-          this->recurseReplaceSuccessor(visited, succ, oldBB, newBB);
+        if (recurse && visited.count(succ) == 0) {          
+          this->recurseReplaceSuccessor(visited, succ, oldBB, newBB, true);
         }      
       }
     }
@@ -1429,6 +1435,11 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
 }
 
 bool DivergenceTracker::eval(const Value *V) {  
+  // We conservatively assume all function arguments to potentially be divergent
+  if (auto arg = dyn_cast<Argument>(V)) {
+    return true;
+  }
+
   if (DV_.count(V) != 0)
     return true;
   

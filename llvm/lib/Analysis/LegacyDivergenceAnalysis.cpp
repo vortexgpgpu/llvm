@@ -130,16 +130,6 @@ void DivergencePropagator::populateWithSourcesOfDivergence() {
   DV.clear();
   DU.clear();
 
-  for (auto &I : instructions(F)) {
-    if (TTI.isSourceOfDivergence(&I)) {
-      dbgs() << "*** divergent instruction: value" << I.getValueID() << " = ";
-      I.print(dbgs());
-      dbgs() << "\n";
-      Worklist.push_back(&I);
-      DV.insert(&I);
-    }
-  }
-
   for (auto &Arg : F.args()) {
     if (TTI.isSourceOfDivergence(&Arg)) {
       dbgs() << "*** divergent function argument: value" << Arg.getValueID() << " = ";
@@ -147,6 +137,16 @@ void DivergencePropagator::populateWithSourcesOfDivergence() {
       dbgs() << "\n";
       Worklist.push_back(&Arg);
       DV.insert(&Arg);
+    }
+  }
+
+  for (auto &I : instructions(F)) {
+    if (TTI.isSourceOfDivergence(&I)) {
+      dbgs() << "*** divergent instruction: value" << I.getValueID() << " = ";
+      I.print(dbgs());
+      dbgs() << "\n";
+      Worklist.push_back(&I);
+      DV.insert(&I);
     }
   }
 }
@@ -275,12 +275,13 @@ void DivergencePropagator::computeInfluenceRegion(
 void DivergencePropagator::exploreDataDependency(Value *V) {
   // Follow def-use chains of V.
   for (User *U : V->users()) {
-    if (!TTI.isAlwaysUniform(U) && DV.insert(U).second) {
-      dbgs() << "*** divergent data dependency: value" << U->getValueID() << " = ";
-      U->print(dbgs());
-      dbgs() << "\n";
-      Worklist.push_back(U);
-    } else {
+    if (!TTI.isAlwaysUniform(U)) {
+      if (DV.insert(U).second) {
+        dbgs() << "*** divergent data dependency: value" << U->getValueID() << " (" << U->getName() << ") = ";
+        U->print(dbgs());
+        dbgs() << "\n";
+        Worklist.push_back(U);
+      }
       // Handle divergent stack stores
       // If the value diverge, also mark the address as divergent,
       // such that loads from that address will also be divergent
@@ -296,10 +297,12 @@ void DivergencePropagator::exploreDataDependency(Value *V) {
             for (User *U2 : addr->users()) {
               if (auto LD = dyn_cast<LoadInst>(U2)) {  
                 if (addr == LD->getPointerOperand()) {
-                  dbgs() << "*** divergent stack load: value" << LD->getValueID() << " = ";
-                  LD->print(dbgs());
-                  dbgs() << "\n";
-                  Worklist.push_back(LD);
+                  if (DV.insert(LD).second) {
+                    dbgs() << "*** divergent stack load: value" << LD->getValueID() << " = ";
+                    LD->print(dbgs());
+                    dbgs() << "\n";
+                    Worklist.push_back(LD);
+                  }
                 }
               }
             }
