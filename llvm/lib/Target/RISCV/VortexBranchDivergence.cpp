@@ -1360,7 +1360,17 @@ void VortexBranchDivergence2::replacePhiDefs(BasicBlock* block,
 ///////////////////////////////////////////////////////////////////////////////
 
 DivergenceTracker::DivergenceTracker(const Function &function) {
-  /*auto module = function.getParent();
+  // Mark all TLS globals as divergent
+  auto module = function.getParent();
+  for (auto& GV : module->getGlobalList()) {
+    if (GV.isThreadLocal()) {
+      if (DV_.insert(&GV).second) {
+        dbgs() << "*** TLS global: value" << GV.getValueID() << " (" << GV.getName() << ")\n";
+      }
+    }
+  }
+
+  /*
   auto global_annos = module->getNamedGlobal("llvm.global.annotations");
   if (global_annos) {
     auto ca = cast<ConstantArray>(global_annos->getOperand(0));
@@ -1450,6 +1460,13 @@ bool DivergenceTracker::eval(const Value *V) {
     // thread after the first sees the value written by the previous thread as
     // original value.
     return true;  
+  }
+
+  // Mark loads from divergent addresses as divergent
+  if (auto LD = dyn_cast<LoadInst>(V)) {  
+    auto addr = LD->getPointerOperand();
+    if (DV_.count(addr) != 0)
+      return true;
   }
 
   return false;
