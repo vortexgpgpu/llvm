@@ -1031,7 +1031,7 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
   if (!ST.hasExtVortex())
     return false;
 
-  dbgs() << "*** Vortex Divergent Branch Handling Pass0 ***\n";
+  LLVM_DEBUG(dbgs() << "*** Vortex Divergent Branch Handling Pass0 ***\n");
 
   std::vector<BasicBlock*> ReturningBlocks;
   std::vector<BasicBlock*> UnreachableBlocks;
@@ -1202,7 +1202,7 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
   if (!ST.hasExtVortex())
     return false;
 
-  dbgs() << "*** Vortex Divergent Branch Handling Pass1 ***\n";  
+  LLVM_DEBUG(dbgs() << "*** Vortex Divergent Branch Handling Pass1 ***\n");
 
   auto *TTIWP = getAnalysisIfAvailable<TargetTransformInfoWrapperPass>();
   if (TTIWP == nullptr)
@@ -1216,7 +1216,7 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
   auto DT  = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   auto PDT = &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
 
-  dbgs() << "*** before changes!\n" << F << "\n";
+  LLVM_DEBUG(dbgs() << "*** before changes!\n" << F << "\n");
 
   std::deque<Region *> RQ;
   addRegionIntoQueue(*RI->getTopLevelRegion(), RQ);
@@ -1227,17 +1227,17 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
   while (!RQ.empty()) {
     auto region = RQ.back();      
     if (isDivergentLoopRegion(region, LI, DA, DT, PDT)) {
-      dbgs() << "*** structurize region: " << region->getNameStr() << "\n";
+      LLVM_DEBUG(dbgs() << "*** structurize region: " << region->getNameStr() << "\n");
       LLVM_DEBUG(region->dump());
       changed |= SCFG->runOnRegion(region);
     } else {
-      dbgs() << "*** skip region: " << region->getNameStr() << "\n";
+      LLVM_DEBUG(dbgs() << "*** skip region: " << region->getNameStr() << "\n");
     }      
     RQ.pop_back();
   }
 
   if (changed) {
-    dbgs() << "*** after changes!\n" << F << "\n";
+    LLVM_DEBUG(dbgs() << "*** after changes!\n" << F << "\n");
   }
   
   return true;
@@ -1283,7 +1283,7 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
   if (!ST.hasExtVortex())
     return false;
 
-  dbgs() << "*** Vortex Divergent Branch Handling Pass2 ***\n";
+  LLVM_DEBUG(dbgs() << "*** Vortex Divergent Branch Handling Pass2 ***\n");
 
   this->initialize(*F.getParent(), ST);
 
@@ -1297,7 +1297,7 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
 
   MST_->incorporateFunction(F); 
 
-  dbgs() << "*** before changes!\n" << F << "\n";
+  LLVM_DEBUG(dbgs() << "*** before changes!\n" << F << "\n");
 
   for (auto I = df_begin(&F.getEntryBlock()),
             E = df_end(&F.getEntryBlock()); I != E; ++I) {
@@ -1305,19 +1305,19 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
 
     auto Br = dyn_cast<BranchInst>(BB->getTerminator());
     if (!Br) {
-      dbgs() << "*** skip no branch: " << PrintBBName(BB) << "\n";
+      LLVM_DEBUG(dbgs() << "*** skip no branch: " << PrintBBName(BB) << "\n");
       continue;
     }
 
     // only process conditional branches
     if (Br->isUnconditional()) {
-      dbgs() << "*** skip non-conditional branch: " << PrintBBName(BB) << "\n";
+      LLVM_DEBUG(dbgs() << "*** skip non-conditional branch: " << PrintBBName(BB) << "\n");
       continue;
     }
 
     // only process divergent branches
     if (DA_->isUniform(Br)) {
-      dbgs() << "*** skip uniform branch: " << PrintBBName(BB) << "\n";
+      LLVM_DEBUG(dbgs() << "*** skip uniform branch: " << PrintBBName(BB) << "\n");
       continue;
     }
 
@@ -1325,7 +1325,7 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
     if (loop) {
       if (std::find(loops_.begin(), loops_.end(), loop) == loops_.end()) {
         // add new loop to the list
-        dbgs() << "*** divergent loop:" << PrintBBName(loop->getHeader()) << "\n";
+        LLVM_DEBUG(dbgs() << "*** divergent loop:" << PrintBBName(loop->getHeader()) << "\n");
         loops_.push_back(loop);
       }
 
@@ -1335,13 +1335,13 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
         auto ipdom = PDT_->findNearestCommonDominator(Br->getSuccessor(0), Br->getSuccessor(1));
         if (loop->contains(ipdom)) {
           // add new branch to the list
-          dbgs() << "*** divergent branch: " << PrintBBName(BB) << "\n";
+          LLVM_DEBUG(dbgs() << "*** divergent branch: " << PrintBBName(BB) << "\n");
           div_blocks_.push_back(BB);
         }
       }
     } else {
       // add new branch to the list
-      dbgs() << "*** divergent branch: " << PrintBBName(BB) << "\n";
+      LLVM_DEBUG(dbgs() << "*** divergent branch: " << PrintBBName(BB) << "\n");
       div_blocks_.push_back(BB);
     }    
   }
@@ -1352,7 +1352,7 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
     this->processLoops(&context, &F);
     this->processBranches(&context, &F);
         
-    dbgs() << "*** after changes!\n" << F << "\n";
+    LLVM_DEBUG(dbgs() << "*** after changes!\n" << F << "\n");
 
     div_blocks_.clear();
     loops_.clear();
@@ -1419,10 +1419,10 @@ void VortexBranchDivergence2::processLoops(LLVMContext* context, Function* funct
     auto preheader_br = dyn_cast<BranchInst>(preheader_term);
     assert(preheader_br);
 
-    dbgs() << "*** process loop: " << PrintBBName(header) << "\n";  
+    LLVM_DEBUG(dbgs() << "*** process loop: " << PrintBBName(header) << "\n");  
 
     // save current thread mask in preheader
-    dbgs() << "****** backup loop's tmask before preheader branch: " << PrintBBName(preheader) << "\n";
+    LLVM_DEBUG( dbgs() << "****** backup loop's tmask before preheader branch: " << PrintBBName(preheader) << "\n");
     auto tmask = CallInst::Create(tmask_func_, "tmask", preheader_br);
 
     auto& subloops = loop->getSubLoops();
@@ -1435,7 +1435,7 @@ void VortexBranchDivergence2::processLoops(LLVMContext* context, Function* funct
 
       for (auto exiting_block : exiting_blocks) {
         // insert a predicate instruction to mask out threads that are exiting the loop
-        dbgs() << "*** insert loop predicate at: " << PrintBBName(exiting_block) << "\n";
+        LLVM_DEBUG(dbgs() << "*** insert loop predicate at: " << PrintBBName(exiting_block) << "\n");
         auto branch = dyn_cast<BranchInst>(exiting_block->getTerminator());
         IRBuilder<> ir_builder(branch);
         auto cond = branch->getCondition();
@@ -1449,7 +1449,7 @@ void VortexBranchDivergence2::processLoops(LLVMContext* context, Function* funct
       EnsureNonNestedExitBlocks(outside_blocks, subloops);
 
       for (auto outside_block : outside_blocks) {
-        dbgs() << "****** restore loop's tmask before external block: " << PrintBBName(outside_block) << "\n";
+        LLVM_DEBUG(dbgs() << "****** restore loop's tmask before external block: " << PrintBBName(outside_block) << "\n");
         auto loop_exit_stub = BasicBlock::Create(*context, "loop_exit_stub", function, outside_block);
         auto loop_exit_stub_br = BranchInst::Create(outside_block, loop_exit_stub);
         PDT_->addNewBlock(loop_exit_stub, outside_block);
@@ -1468,16 +1468,17 @@ void VortexBranchDivergence2::processBranches(LLVMContext* context, Function* fu
     auto block = *it;
     auto branch = dyn_cast<BranchInst>(block->getTerminator());
     auto ipdom = PDT_->findNearestCommonDominator(branch->getSuccessor(0), branch->getSuccessor(1));
+    assert(ipdom);
     
     // insert split instruction before divergent branch
-    dbgs() << "*** insert split at: " << PrintBBName(block) << "\n";
+    LLVM_DEBUG(dbgs() << "*** insert split at: " << PrintBBName(block) << "\n");
     IRBuilder<> ir_builder(branch);
     auto cond = branch->getCondition();
     auto cond_i32 = ir_builder.CreateIntCast(cond, ir_builder.getInt32Ty(), false, PrintValueName(cond) + ".i32");
     CallInst::Create(split_func_, cond_i32, "", branch);
 
     // insert join block before ipdom
-    dbgs() << "*** insert join at: " << PrintBBName(ipdom) << "\n";
+    LLVM_DEBUG(dbgs() << "*** insert join at: " << PrintBBName(ipdom) << "\n");
     auto stub = BasicBlock::Create(*context, "join_stub", function, ipdom);
     auto stub_br = BranchInst::Create(ipdom, stub);
     CallInst::Create(join_func_, "", stub_br);
@@ -1505,12 +1506,9 @@ void VortexBranchDivergence2::recurseReplaceSuccessor(DenseSet<const BasicBlock 
     for (unsigned i = 0, n = branch->getNumSuccessors(); i < n; ++i) {
       auto succ = branch->getSuccessor(i);
       if (succ == oldBB) {
-        dbgs() << "****** replace " << PrintBBName(pred) << ".succ[" << i << "]: " << PrintBBName(oldBB) << " with " << PrintBBName(newBB) << "\n";
+        LLVM_DEBUG(dbgs() << "****** replace " << PrintBBName(pred) << ".succ[" << i << "]: " << PrintBBName(oldBB) << " with " << PrintBBName(newBB) << "\n");
         branch->setSuccessor(i, newBB);
         this->replacePhiDefs(oldBB, pred, newBB);
-        //dbgs() << *block;
-        //dbgs() << *newBB;
-        //dbgs() << *oldBB;
       } else {        
         if (recurse && visited.count(succ) == 0) {          
           this->recurseReplaceSuccessor(visited, succ, oldBB, newBB, true);
@@ -1593,8 +1591,7 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
   for (auto& GV : module->getGlobalList()) {
     if (GV.isThreadLocal()) {
       if (dv_nodes_.insert(&GV).second) {
-        dbgs() << "*** Divergent TLS variable: value" << MST.getLocalSlot(&GV) << "\n";
-        dbgs() << GV << "\n";
+        LLVM_DEBUG(dbgs() << "*** Divergent TLS variable: value" << MST.getLocalSlot(&GV) << "\n" << GV << "\n");
       }
     }
   }   
@@ -1603,14 +1600,12 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
     for (auto& I : BB) {
       if (I.getMetadata("vortex.uniform") != NULL) {
         uv_annotations_.insert(&I);
-        dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(&I) << "\n";
-        dbgs() << I << "\n";
+        LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(&I) << "\n" << I << "\n");
       } else
       if (I.getMetadata("vortex.divergent") != NULL 
        || I.getMetadata("divergent") != NULL) {
         dv_annotations_.insert(&I);
-        dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(&I) << "\n";
-        dbgs() << I << "\n";
+        LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(&I) << "\n" << I << "\n");
       } else
       if (auto II = dyn_cast<llvm::IntrinsicInst>(&I)) {
         // process Vortex's annotate("vortex.uniform")) attribute
@@ -1622,14 +1617,12 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
             auto var = II->getOperand(0);
             if (auto AI = dyn_cast<AllocaInst>(var)) {
               uv_annotations_.insert(var);
-              dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(AI) << "\n";
-              dbgs() << AI << "\n";
+              LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(AI) << "\n" << AI << "\n");
             } else 
             if (auto CI = dyn_cast<CastInst>(var)) {
               auto var2 = CI->getOperand(0);              
               uv_annotations_.insert(var2);
-              dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(var2) << "\n";
-              dbgs() << var2 << "\n";
+              LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(var2) << "\n" << var2 << "\n");
             }                        
           } else 
           if (cda->getAsCString() == "vortex.divergent" 
@@ -1637,14 +1630,12 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
             auto var = II->getOperand(0);
             if (auto AI = dyn_cast<AllocaInst>(var)) {
               dv_annotations_.insert(var);
-              dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(AI) << "\n";
-              dbgs() << AI << "\n";
+              LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(AI) << "\n" << AI << "\n");
             } else 
             if (auto CI = dyn_cast<CastInst>(var)) {
               auto var2 = CI->getOperand(0);              
               dv_annotations_.insert(var2);
-              dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(var2) << "\n";
-              dbgs() << var2 << "\n";
+              LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(var2) << "\n" << var2 << "\n");
             }                        
           }
         }
@@ -1655,40 +1646,34 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
           auto value = SI->getValueOperand();
           if (auto CI = dyn_cast<CastInst>(value)) {  
             auto src = CI->getOperand(0);
-            dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(src) << "\n";
+            LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(src) << "\n" << src << "\n");
             uv_nodes_.insert(src);
-            dbgs() << src << "\n";
           } else {
-            dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(value) << "\n";
+            LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(value) << "\n" << value << "\n");
             uv_nodes_.insert(value);
-            dbgs() << value << "\n";
           }
         } else
         if (dv_annotations_.count(addr) != 0) {
           auto value = SI->getValueOperand();
           if (auto CI = dyn_cast<CastInst>(value)) {  
             auto src = CI->getOperand(0);
-            dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(src) << "\n";
+            LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(src) << "\n" << src << "\n");
             dv_nodes_.insert(src);
-            dbgs() << src << "\n";
           } else {
-            dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(value) << "\n";
+            LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(value) << "\n" << value << "\n");
             dv_nodes_.insert(value);
-            dbgs() << value << "\n";
           }
         }
       } else 
       if (auto LI = dyn_cast<LoadInst>(&I)) {
         auto addr = LI->getPointerOperand();   
         if (uv_annotations_.count(addr) != 0) {
-          dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(&I) << "\n";
+          LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(&I) << "\n" << I << "\n");
           uv_nodes_.insert(&I);
-          dbgs() << I << "\n";
         } else
         if (dv_annotations_.count(addr) != 0) {
-          dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(&I) << "\n";
+          LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(&I) << "\n" << I << "\n");
           dv_nodes_.insert(&I);
-          dbgs() << I << "\n";
         }
       }
     }
