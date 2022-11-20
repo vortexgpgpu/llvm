@@ -37,6 +37,7 @@ using namespace llvm;
 
 // Vortex extension passes
 namespace llvm {
+FunctionPass *createVortexBranchDivergence0Pass();
 FunctionPass *createVortexBranchDivergence1Pass();
 FunctionPass *createVortexBranchDivergence2Pass();
 }
@@ -204,9 +205,9 @@ void RISCVPassConfig::addPreRegAlloc() {
 bool RISCVPassConfig::addPreISel() {
   if (isVortex_) {
     addPass(createLowerSwitchPass());
-    addPass(createFlattenCFGPass());
-    addPass(createUnifyFunctionExitNodesPass());
+    addPass(createFlattenCFGPass());    
     //addPass(createStructurizeCFGPass());
+    addPass(createVortexBranchDivergence0Pass());
     addPass(createVortexBranchDivergence1Pass());
     addPass(createVortexBranchDivergence2Pass());
   }

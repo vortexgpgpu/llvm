@@ -43,6 +43,9 @@ void initializeRISCVMergeBaseOffsetOptPass(PassRegistry &);
 FunctionPass *createRISCVExpandPseudoPass();
 void initializeRISCVExpandPseudoPass(PassRegistry &);
 
+FunctionPass *createVortexBranchDivergence0Pass();
+void initializeVortexBranchDivergence0Pass(PassRegistry&);
+
 FunctionPass *createVortexBranchDivergence1Pass();
 void initializeVortexBranchDivergence1Pass(PassRegistry&);
 

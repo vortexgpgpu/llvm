@@ -121,8 +121,8 @@ private:
   PostDominatorTree &PDT;
   std::vector<Value *> Worklist; // Stack for DFS.
   DenseSet<const Value *> &DV;   // Stores all divergent values.
-  DenseSet<const Use *> &DU;   // Stores divergent uses of possibly uniform
-                               // values.
+  DenseSet<const Use *> &DU;     // Stores divergent uses of possibly uniform
+                                 // values.
 };
 
 void DivergencePropagator::populateWithSourcesOfDivergence() {
@@ -272,6 +272,67 @@ void DivergencePropagator::computeInfluenceRegion(
   }
 }
 
+static void RecurseFindSrcAllocations(DenseSet<AllocaInst*>& allocs, Instruction* I, DenseSet<Instruction*>& visited) {
+  if (visited.count(I)) {
+    dbgs() << "*** RecurseFindAllocations: visited\n";
+    return;  
+  }
+  visited.insert(I);
+
+  if (isa<StoreInst>(I) 
+   || isa<LoadInst>(I))
+    return;
+
+  auto alloc = dyn_cast<AllocaInst>(I);
+  if (alloc != nullptr) {
+    allocs.insert(alloc);
+    return;
+  }
+
+  for (auto& op : I->operands()) {
+    auto opVal = op.get();
+    if (!isa<Instruction>(opVal))
+      continue;
+    auto opInst = cast<Instruction>(opVal);
+    RecurseFindSrcAllocations(allocs, opInst, visited);
+  }
+}
+
+static void FindSrcAllocations(DenseSet<AllocaInst*>& allocs, Instruction* I) {
+  DenseSet<Instruction*> visited;
+  RecurseFindSrcAllocations(allocs, I, visited);
+}
+
+static void RecurseFindDstLoads(DenseSet<LoadInst*>& loads, Instruction* I, DenseSet<Instruction*>& visited) {
+  if (visited.count(I)) {
+    dbgs() << "*** RecurseFindLoads: visited\n";
+    return;  
+  }
+  visited.insert(I);
+
+  if (isa<StoreInst>(I) 
+   || isa<AllocaInst>(I))
+    return;
+
+  auto LD = dyn_cast<LoadInst>(I);
+  if (LD != nullptr) {
+    loads.insert(LD);
+    return;
+  }
+
+  for (auto user : I->users()) {
+    if (!isa<Instruction>(user))
+      continue;
+    auto userInst = cast<Instruction>(user);
+    RecurseFindDstLoads(loads, userInst, visited);
+  }
+}
+
+static void FindDstLoads(DenseSet<LoadInst*>& loads, Instruction* I) {
+  DenseSet<Instruction*> visited;
+  RecurseFindDstLoads(loads, I, visited);
+}
+
 void DivergencePropagator::exploreDataDependency(Value *V) {
   // Follow def-use chains of V.
   for (User *U : V->users()) {
@@ -288,13 +349,52 @@ void DivergencePropagator::exploreDataDependency(Value *V) {
       if (auto ST = dyn_cast<StoreInst>(U)) {        
         auto value = ST->getValueOperand();
         if (value == V) {
-          auto addr = ST->getPointerOperand();   
-          if (dyn_cast<AllocaInst>(addr) != NULL) {                    
-            dbgs() << "*** divergent stack store: ";
-            ST->print(dbgs());
-            dbgs() << "\n";
-            // mark loads using this address as divergent
-            for (User *U2 : addr->users()) {
+          auto addr = ST->getPointerOperand();
+          if (!isa<Instruction>(addr))
+            continue;
+
+          auto addrInst = cast<Instruction>(addr);
+          
+          DenseSet<AllocaInst*> allocs;          
+          FindSrcAllocations(allocs, addrInst);
+
+          /*AllocaInst* alloc = dyn_cast<AllocaInst>(addr);
+          if (alloc == nullptr) {
+            auto gep = dyn_cast<GetElementPtrInst>(addr);
+            if (gep == nullptr) {
+              dbgs() << "*** broken store address: " << *addr << "\n";
+            }
+            auto ptr = gep->getPointerOperand();
+            alloc = dyn_cast<AllocaInst>(ptr);
+          }*/
+
+          if (!allocs.empty()) {                    
+            dbgs() << "*** divergent stack store:\n";
+            dbgs() << *ST << "\n";
+
+            for (auto alloc : allocs) {              
+              dbgs() << "*** divergent stack allocation:\n";
+              dbgs() << *alloc << "\n";
+
+              DenseSet<LoadInst*> loads;
+              for (auto user : alloc->users()) {
+                auto userInst = cast<Instruction>(user);
+                if (userInst) {
+                  FindDstLoads(loads, userInst);
+                }
+              }
+
+              for (auto LD : loads) {
+                if (DV.insert(LD).second) {
+                  dbgs() << "*** divergent stack load:\n";
+                  dbgs() << *LD << "\n";
+                  Worklist.push_back(LD);
+                }
+              }
+            }
+
+            /*// mark all loads using this address as divergent
+            for (User *U2 : alloc->users()) {
               if (auto LD = dyn_cast<LoadInst>(U2)) {  
                 if (addr == LD->getPointerOperand()) {
                   if (DV.insert(LD).second) {
@@ -304,8 +404,23 @@ void DivergencePropagator::exploreDataDependency(Value *V) {
                     Worklist.push_back(LD);
                   }
                 }
+              } else 
+              if (auto gep = dyn_cast<GetElementPtrInst>(U2)) {
+                for (User *U3 : gep->users()) {
+                  if (auto LD = dyn_cast<LoadInst>(U3)) {  
+                    if (gep == LD->getPointerOperand()) {
+                      if (DV.insert(LD).second) {
+                        dbgs() << "*** divergent stack load: value" << LD->getValueID() << " = ";
+                        LD->print(dbgs());
+                        dbgs() << "\n";
+                        Worklist.push_back(LD);
+                      }
+                    }
+                  }
+                }
               }
-            }
+            }*/
+
           }
         }
       }
@@ -390,7 +505,6 @@ bool LegacyDivergenceAnalysis::runOnFunction(Function &F) {
     // run the new GPU divergence analysis
     auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
     gpuDA = std::make_unique<GPUDivergenceAnalysis>(F, DT, PDT, LI, TTI);
-
   } else {
     // run LLVM's existing DivergenceAnalysis
     DivergencePropagator DP(F, TTI, DT, PDT, DivergentValues, DivergentUses);
