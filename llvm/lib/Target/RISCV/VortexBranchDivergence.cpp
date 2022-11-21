@@ -42,6 +42,9 @@ using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "vortex-branch-divergence"
 
+//#define LLVM_DEBUG(x) do {} while (false)
+//#define LLVM_DEBUG(x) do {x;} while (false)
+
 static cl::opt<bool> RelaxedUniformRegions(
   "vortex-branch-divergence-relaxed-uniform-regions", cl::Hidden,
   cl::desc("Allow relaxed uniform region checks"), cl::init(true)
@@ -1304,10 +1307,8 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
     auto BB = *I;
 
     auto Br = dyn_cast<BranchInst>(BB->getTerminator());
-    if (!Br) {
-      LLVM_DEBUG(dbgs() << "*** skip no branch: " << PrintBBName(BB) << "\n");
+    if (!Br)
       continue;
-    }
 
     // only process conditional branches
     if (Br->isUnconditional()) {
@@ -1331,13 +1332,11 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
 
       // check if the block is a nested branch
       auto header = loop->getHeader();
-      if (BB != header) {
-        auto ipdom = PDT_->findNearestCommonDominator(Br->getSuccessor(0), Br->getSuccessor(1));
-        if (loop->contains(ipdom)) {
-          // add new branch to the list
-          LLVM_DEBUG(dbgs() << "*** divergent branch: " << PrintBBName(BB) << "\n");
-          div_blocks_.push_back(BB);
-        }
+      auto ipdom = PDT_->findNearestCommonDominator(Br->getSuccessor(0), Br->getSuccessor(1));
+      if (loop->contains(ipdom)) {
+        // add new branch to the list
+        LLVM_DEBUG(dbgs() << "*** divergent branch: " << PrintBBName(BB) << "\n");
+        div_blocks_.push_back(BB);
       }
     } else {
       // add new branch to the list
@@ -1591,7 +1590,7 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
   for (auto& GV : module->getGlobalList()) {
     if (GV.isThreadLocal()) {
       if (dv_nodes_.insert(&GV).second) {
-        LLVM_DEBUG(dbgs() << "*** Divergent TLS variable: value" << MST.getLocalSlot(&GV) << "\n" << GV << "\n");
+        LLVM_DEBUG(dbgs() << "*** Divergent TLS variable\n" << GV << "\n");
       }
     }
   }   
@@ -1599,12 +1598,12 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
   for (auto& BB : function) {
     for (auto& I : BB) {
       if (I.getMetadata("vortex.uniform") != NULL) {
-        uv_annotations_.insert(&I);
+        uv_nodes_.insert(&I);
         LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(&I) << "\n" << I << "\n");
       } else
       if (I.getMetadata("vortex.divergent") != NULL 
        || I.getMetadata("divergent") != NULL) {
-        dv_annotations_.insert(&I);
+        dv_nodes_.insert(&I);
         LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(&I) << "\n" << I << "\n");
       } else
       if (auto II = dyn_cast<llvm::IntrinsicInst>(&I)) {
@@ -1616,74 +1615,38 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
           if (cda->getAsCString() == "vortex.uniform") {
             auto var = II->getOperand(0);
             if (auto AI = dyn_cast<AllocaInst>(var)) {
-              uv_annotations_.insert(var);
-              LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(AI) << "\n" << AI << "\n");
+              uv_nodes_.insert(var);
+              LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(AI) << "\n" << *AI << "\n");
             } else 
             if (auto CI = dyn_cast<CastInst>(var)) {
               auto var2 = CI->getOperand(0);              
-              uv_annotations_.insert(var2);
-              LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(var2) << "\n" << var2 << "\n");
+              uv_nodes_.insert(var2);
+              LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(var2) << "\n" << *var2 << "\n");
             }                        
           } else 
           if (cda->getAsCString() == "vortex.divergent" 
            || cda->getAsCString() == "divergent") {
             auto var = II->getOperand(0);
             if (auto AI = dyn_cast<AllocaInst>(var)) {
-              dv_annotations_.insert(var);
-              LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(AI) << "\n" << AI << "\n");
+              dv_nodes_.insert(var);
+              LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(AI) << "\n" << *AI << "\n");
             } else 
             if (auto CI = dyn_cast<CastInst>(var)) {
               auto var2 = CI->getOperand(0);              
-              dv_annotations_.insert(var2);
-              LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(var2) << "\n" << var2 << "\n");
+              dv_nodes_.insert(var2);
+              LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(var2) << "\n" << *var2 << "\n");
             }                        
           }
-        }
-      } else 
-      if (auto SI = dyn_cast<StoreInst>(&I)) {
-        auto addr = SI->getPointerOperand();   
-        if (uv_annotations_.count(addr) != 0) {
-          auto value = SI->getValueOperand();
-          if (auto CI = dyn_cast<CastInst>(value)) {  
-            auto src = CI->getOperand(0);
-            LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(src) << "\n" << src << "\n");
-            uv_nodes_.insert(src);
-          } else {
-            LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(value) << "\n" << value << "\n");
-            uv_nodes_.insert(value);
-          }
-        } else
-        if (dv_annotations_.count(addr) != 0) {
-          auto value = SI->getValueOperand();
-          if (auto CI = dyn_cast<CastInst>(value)) {  
-            auto src = CI->getOperand(0);
-            LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(src) << "\n" << src << "\n");
-            dv_nodes_.insert(src);
-          } else {
-            LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(value) << "\n" << value << "\n");
-            dv_nodes_.insert(value);
-          }
-        }
-      } else 
-      if (auto LI = dyn_cast<LoadInst>(&I)) {
-        auto addr = LI->getPointerOperand();   
-        if (uv_annotations_.count(addr) != 0) {
-          LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(&I) << "\n" << I << "\n");
-          uv_nodes_.insert(&I);
-        } else
-        if (dv_annotations_.count(addr) != 0) {
-          LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(&I) << "\n" << I << "\n");
-          dv_nodes_.insert(&I);
         }
       }
     }
   }
 }
 
-bool DivergenceTracker::eval(const Value *V) {  
+bool DivergenceTracker::eval(const Value *V) {
   // Mark variable as uniform is specified via aannotation
   if (uv_nodes_.count(V) != 0)
-      return false;
+    return false;
 
   // Mark variable with divergent is detected as TLS
   if (dv_nodes_.count(V) != 0)
@@ -1704,6 +1667,13 @@ bool DivergenceTracker::eval(const Value *V) {
   if (isa<AtomicRMWInst>(V) 
    || isa<AtomicCmpXchgInst>(V)) {
     return true;  
+  }
+
+  // Mark loads from divergent addresses as divergent
+  if (auto LD = dyn_cast<LoadInst>(V)) {  
+    auto addr = LD->getPointerOperand();
+    if (dv_nodes_.count(addr) != 0)
+      return true;
   }
 
   return false;
