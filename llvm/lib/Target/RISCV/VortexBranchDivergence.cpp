@@ -42,7 +42,7 @@ using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "vortex-branch-divergence"
 
-#define LLVM_DEBUG(x) do {x;} while (false)
+//#define LLVM_DEBUG(x) do {x;} while (false)
 
 static cl::opt<bool> RelaxedUniformRegions(
   "vortex-branch-divergence-relaxed-uniform-regions", cl::Hidden,
