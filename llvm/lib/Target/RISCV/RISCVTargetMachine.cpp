@@ -40,6 +40,7 @@ namespace llvm {
 FunctionPass *createVortexBranchDivergence0Pass();
 FunctionPass *createVortexBranchDivergence1Pass();
 FunctionPass *createVortexBranchDivergence2Pass();
+FunctionPass *createVortexBranchDivergence3Pass();
 }
 
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
@@ -207,9 +208,10 @@ bool RISCVPassConfig::addPreISel() {
     addPass(createLowerSwitchPass());
     addPass(createFlattenCFGPass());    
     //addPass(createStructurizeCFGPass());
-    addPass(createVortexBranchDivergence0Pass());
+    //addPass(createVortexBranchDivergence0Pass());
     addPass(createVortexBranchDivergence1Pass());
-    addPass(createVortexBranchDivergence2Pass());
+    //addPass(createVortexBranchDivergence2Pass());
+    addPass(createVortexBranchDivergence3Pass());
   }
   return false;
 }

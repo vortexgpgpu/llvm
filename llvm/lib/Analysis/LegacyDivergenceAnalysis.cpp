@@ -84,7 +84,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "divergence"
 
-//#define LLVM_DEBUG(x) do {} while (false)
 //#define LLVM_DEBUG(x) do {x;} while (false)
 
 // transparently use the GPUDivergenceAnalysis

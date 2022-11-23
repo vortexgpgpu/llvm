@@ -42,8 +42,7 @@ using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "vortex-branch-divergence"
 
-//#define LLVM_DEBUG(x) do {} while (false)
-//#define LLVM_DEBUG(x) do {x;} while (false)
+#define LLVM_DEBUG(x) do {x;} while (false)
 
 static cl::opt<bool> RelaxedUniformRegions(
   "vortex-branch-divergence-relaxed-uniform-regions", cl::Hidden,
@@ -870,6 +869,132 @@ bool StructurizeCFG::runOnRegion(Region *R) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+class NamePrinter {
+private:
+  std::unique_ptr<ModuleSlotTracker> MST_;
+
+public:
+  void init(Function* function) {
+    auto module = function->getParent();
+    MST_ = std::make_unique<ModuleSlotTracker>(module);
+    MST_->incorporateFunction(*function);
+  }
+
+  std::string ValueName(llvm::Value* V) {
+    std::string str("V.");
+    if (V->hasName()) {    
+      str += std::string(V->getName().data(), V->getName().size());
+    } else {    
+      auto slot = MST_->getLocalSlot(V);
+      str += std::to_string(slot);
+    }
+    return str;
+  }
+
+  std::string BBName(llvm::BasicBlock* BB) {
+    std::string str("BB.");
+    if (BB->hasName()) {    
+      str += std::string(BB->getName().data(), BB->getName().size());
+    } else {
+      auto slot = MST_->getLocalSlot(&BB->front());
+      if (slot > 0) {
+        str += std::to_string(slot - 1);
+      } else {
+        str = "";
+        dbgs() << "(" << BB->front() << ")";
+      }
+    }  
+    return str;
+  }
+};
+
+///////////////////////////////////////////////////////////////////////////////
+
+class ReplaceSuccessor {
+private:
+  DenseMap<std::pair<PHINode*, BasicBlock*>, PHINode*> phi_table_;  
+  NamePrinter namePrinter_;
+
+  void findSuccessor(DenseSet<BasicBlock *>& visited, BasicBlock* current, BasicBlock* target, std::vector<BasicBlock*>& out) {
+    visited.insert(current);
+    auto branch = dyn_cast<BranchInst>(current->getTerminator());
+    if (branch) {
+      for (auto succ : branch->successors()) {
+        if (succ == target) {
+          out.push_back(current);
+        } else {        
+          if (visited.count(succ) == 0) {          
+            this->findSuccessor(visited, succ, target, out);
+          }      
+        }
+      }
+    }
+  }
+
+public:
+
+  void init(Function* function) {
+    namePrinter_.init(function);
+    phi_table_.clear();
+  }
+
+  void findSuccessor(BasicBlock* start, BasicBlock* target, std::vector<BasicBlock*>& out) {    
+    DenseSet<BasicBlock *> visited;
+    this->findSuccessor(visited, start, target, out);
+  }
+
+  bool replaceSuccessor(BasicBlock* BB, BasicBlock* oldSucc, BasicBlock* newSucc) {
+    bool found = false;
+    auto branch = dyn_cast<BranchInst>(BB->getTerminator());
+    if (branch) {
+      for (unsigned i = 0, n = branch->getNumSuccessors(); i < n; ++i) {
+        auto succ = branch->getSuccessor(i);        
+        if (succ == oldSucc) {
+          LLVM_DEBUG(dbgs() << "****** replace " << namePrinter_.BBName(BB) << ".succ[" << i << "]: " << namePrinter_.BBName(oldSucc) << " with " << namePrinter_.BBName(newSucc) << "\n");
+          branch->setSuccessor(i, newSucc);
+          this->replacePhiDefs(oldSucc, BB, newSucc);
+          found = true;
+        }
+      }
+    }
+    return found;
+  }
+
+  void replacePhiDefs(BasicBlock* block, BasicBlock* oldPred, BasicBlock* newPred) {
+    // process all phi nodes in old successor
+    for (auto II = block->begin(), IE = block->end(); II != IE; ++II) {
+      PHINode *phi = dyn_cast<PHINode>(II);
+      if (!phi)
+        continue;
+
+      for (unsigned op = 0, nOps = phi->getNumOperands(); op != nOps; ++op) {
+        if (phi->getIncomingBlock(op) != oldPred)
+          continue;        
+
+        PHINode* phi_stub;
+        auto key = std::make_pair(phi, newPred);
+        auto entry = phi_table_.find(key);
+        if (entry != phi_table_.end()) {
+          phi_stub = entry->second;
+        } else {
+          // create corresponding Phi node in new block
+          phi_stub = PHINode::Create(phi->getType(), 1, phi->getName(), &newPred->front());
+          phi_table_[key] = phi_stub;
+
+          // add new phi to succesor's phi node
+          phi->addIncoming(phi_stub, newPred);
+        }
+
+        // move phi's operand into new phi node
+        Value *del_value = phi->removeIncomingValue(op);
+        phi_stub->addIncoming(del_value, oldPred);
+      }
+    }  
+  }
+};
+
+///////////////////////////////////////////////////////////////////////////////
+
 struct VortexBranchDivergence0 : public FunctionPass {
 public:
 
@@ -902,7 +1027,31 @@ public:
 
 ///////////////////////////////////////////////////////////////////////////////
 
-class VortexBranchDivergence2 : public FunctionPass {
+struct VortexBranchDivergence2 : public FunctionPass {
+private:
+  DominatorTree *DT_;
+  PostDominatorTree *PDT_;
+  RegionInfo *RI_;
+  ReplaceSuccessor replaceSuccessor_;
+
+  bool separateIPDOM(Region* region, Region* parent);
+
+public:
+
+  static char ID;
+  
+  VortexBranchDivergence2();
+
+  StringRef getPassName() const override;
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override;
+
+  bool runOnFunction(Function &F) override;
+};
+
+///////////////////////////////////////////////////////////////////////////////
+
+class VortexBranchDivergence3 : public FunctionPass {
 private:
 
   LegacyDivergenceAnalysis *DA_;
@@ -911,11 +1060,12 @@ private:
   LoopInfo *LI_;
   RegionInfo *RI_;
 
-  DenseMap<std::pair<PHINode*, BasicBlock*>, PHINode*> phi_table_;  
   std::vector<BasicBlock*> div_blocks_;
   std::vector<Loop*> loops_;
 
-  std::unique_ptr<ModuleSlotTracker> MST_;
+  NamePrinter namePrinter_;
+
+  ReplaceSuccessor replaceSuccessor_;
 
   Function *tmask_func_;
   Function *pred_func_;
@@ -929,25 +1079,11 @@ private:
 
   void processLoops(LLVMContext* context, Function* function);
 
-  void recurseReplaceSuccessor(BasicBlock* pred, BasicBlock* oldBB, BasicBlock* newBB, bool recurse);
-
-  void recurseReplaceSuccessor(DenseSet<const BasicBlock *>& visited, 
-                               BasicBlock* pred, 
-                               BasicBlock* oldBB, 
-                               BasicBlock* newBB,
-                               bool recurse);
-
-  void replacePhiDefs(BasicBlock* block, BasicBlock* oldBB, BasicBlock* newBB);
-
-  std::string PrintValueName(llvm::Value* V);
-
-  std::string PrintBBName(llvm::BasicBlock* BB);
-
 public:
 
   static char ID;
 
-  VortexBranchDivergence2();
+  VortexBranchDivergence3();
 
   StringRef getPassName() const override;
 
@@ -965,6 +1101,7 @@ namespace llvm {
 void initializeVortexBranchDivergence0Pass(PassRegistry &);
 void initializeVortexBranchDivergence1Pass(PassRegistry &);
 void initializeVortexBranchDivergence2Pass(PassRegistry &);
+void initializeVortexBranchDivergence3Pass(PassRegistry &);
 
 FunctionPass *createVortexBranchDivergence0Pass() {
   return new VortexBranchDivergence0();
@@ -977,6 +1114,11 @@ FunctionPass *createVortexBranchDivergence1Pass() {
 FunctionPass *createVortexBranchDivergence2Pass() {
   return new VortexBranchDivergence2();
 }
+
+FunctionPass *createVortexBranchDivergence3Pass() {
+  return new VortexBranchDivergence3();
+}
+
 
 }
 
@@ -996,6 +1138,15 @@ INITIALIZE_PASS_END(VortexBranchDivergence1, "vortex-branch-divergence-1",
                     "Vortex Structurize controlflow", false, false)
 
 INITIALIZE_PASS_BEGIN(VortexBranchDivergence2, "vortex-branch-divergence-2",
+                      "Vortex IPOM Sepaation", false, false)
+INITIALIZE_PASS_DEPENDENCY(RegionInfoPass)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(PostDominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(TargetPassConfig)
+INITIALIZE_PASS_END(VortexBranchDivergence2, "vortex-branch-divergence-2",
+                    "Vortex IPOM Sepaation", false, false)
+
+INITIALIZE_PASS_BEGIN(VortexBranchDivergence3, "vortex-branch-divergence-3",
                       "Vortex Branch Divergence", false, false)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
@@ -1004,7 +1155,7 @@ INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(PostDominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LegacyDivergenceAnalysis)
 INITIALIZE_PASS_DEPENDENCY(TargetPassConfig)
-INITIALIZE_PASS_END(VortexBranchDivergence2, "vortex-branch-divergence-2",
+INITIALIZE_PASS_END(VortexBranchDivergence3, "vortex-branch-divergence-3",
                     "Vortex Branch Divergence", false, false)
 
 namespace vortex {
@@ -1035,6 +1186,10 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
     return false;
 
   LLVM_DEBUG(dbgs() << "*** Vortex Divergent Branch Handling Pass0 ***\n");
+
+  LLVM_DEBUG(dbgs() << "*** before Pass0 changes!\n" << F << "\n");
+
+  bool changed = false;
 
   std::vector<BasicBlock*> ReturningBlocks;
   std::vector<BasicBlock*> UnreachableBlocks;
@@ -1082,6 +1237,7 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
       BranchInst::Create(NewRetBlock, BB);
     }
     ReturnBlock = NewRetBlock;
+    changed = true;
   }
 
   //
@@ -1099,6 +1255,7 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
       BB->getInstList().pop_back();  // Remove the unreachable inst.
       BranchInst::Create(UnreachableBlock, BB);
     }
+    changed = true;
   }
 
   // Ensure single exit block
@@ -1128,6 +1285,11 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
     BranchInst::Create(NewRetBlock, ReturnBlock);
     
     ReturnBlock = NewRetBlock;
+    changed = true;
+  }
+
+  if (changed) {
+    LLVM_DEBUG(dbgs() << "*** after Pass0 changes!\n" << F << "\n");
   }
 
   return true;
@@ -1219,8 +1381,6 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
   auto DT  = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   auto PDT = &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
 
-  LLVM_DEBUG(dbgs() << "*** before changes!\n" << F << "\n");
-
   std::deque<Region *> RQ;
   addRegionIntoQueue(*RI->getTopLevelRegion(), RQ);
 
@@ -1240,7 +1400,7 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
   }
 
   if (changed) {
-    LLVM_DEBUG(dbgs() << "*** after changes!\n" << F << "\n");
+    LLVM_DEBUG(dbgs() << "*** after Pass1 changes!\n" << F << "\n");
   }
   
   return true;
@@ -1248,17 +1408,82 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-char VortexBranchDivergence2::ID = 1;
+char VortexBranchDivergence2::ID = 0;
+
+StringRef VortexBranchDivergence2::getPassName() const { 
+  return "Vortex IPDOM Separation";
+}
 
 VortexBranchDivergence2::VortexBranchDivergence2() : FunctionPass(ID) {
   initializeVortexBranchDivergence2Pass(*PassRegistry::getPassRegistry());
 }
 
-StringRef VortexBranchDivergence2::getPassName() const { 
+void VortexBranchDivergence2::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.addRequired<RegionInfoPass>();
+  AU.addRequired<DominatorTreeWrapperPass>();
+  AU.addRequired<PostDominatorTreeWrapperPass>();
+  AU.addRequired<TargetPassConfig>();
+  FunctionPass::getAnalysisUsage(AU);
+}
+
+bool VortexBranchDivergence2::runOnFunction(Function &F) {
+  // Check if the Vortex extension is enabled
+  const auto &TPC = getAnalysis<TargetPassConfig>();
+  const auto &TM = TPC.getTM<TargetMachine>();  
+  const auto &ST = TM.getSubtarget<RISCVSubtarget>(F);
+  if (!ST.hasExtVortex())
+    return false;
+
+  LLVM_DEBUG(dbgs() << "*** Vortex Divergent Branch Handling Pass2 ***\n");
+
+  RI_ = &getAnalysis<RegionInfoPass>().getRegionInfo();
+  DT_ = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+  PDT_= &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
+
+  bool changed = this->separateIPDOM(RI_->getTopLevelRegion(), nullptr);  
+
+  if (changed) {
+    LLVM_DEBUG(dbgs() << "*** after Pass2 changes!\n" << F << "\n");
+  }
+
+  return true;
+}
+
+bool VortexBranchDivergence2::separateIPDOM(Region* region, Region* parent) {
+  bool changed = false;  
+  /*if (parent != nullptr) {
+    auto p_exitBB = parent->getExit();
+    auto r_exitBB = region->getExit();
+    if (p_exitBB == r_exitBB) {
+      auto function = p_exitBB->getParent();      
+      auto &context = function->getContext();
+      auto r_topBB = region->getEntry();
+      auto stub = BasicBlock::Create(context, "ipdom_stub", function, p_exitBB);
+      BranchInst::Create(p_exitBB, stub);
+      replaceSuccessor_.replace(r_topBB, p_exitBB, stub, true);
+      changed = true;
+    } 
+  }
+  for (auto& subregion : *region) {
+    if (this->separateIPDOM(subregion.get(), region))
+      changed = true;
+  }*/
+  return changed;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+char VortexBranchDivergence3::ID = 1;
+
+VortexBranchDivergence3::VortexBranchDivergence3() : FunctionPass(ID) {
+  initializeVortexBranchDivergence3Pass(*PassRegistry::getPassRegistry());
+}
+
+StringRef VortexBranchDivergence3::getPassName() const { 
   return "Vortex Handle Branch Divergence";
 }
 
-void VortexBranchDivergence2::getAnalysisUsage(AnalysisUsage &AU) const {  
+void VortexBranchDivergence3::getAnalysisUsage(AnalysisUsage &AU) const {  
   AU.addRequired<LoopInfoWrapperPass>();
   AU.addRequiredID(LoopSimplifyID);
   AU.addRequired<RegionInfoPass>();
@@ -1269,16 +1494,15 @@ void VortexBranchDivergence2::getAnalysisUsage(AnalysisUsage &AU) const {
   FunctionPass::getAnalysisUsage(AU);
 }
 
-void VortexBranchDivergence2::initialize(Module &M, const RISCVSubtarget &ST) {
+void VortexBranchDivergence3::initialize(Module &M, const RISCVSubtarget &ST) {
   tmask_func_ = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_tmask);
   pred_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_pred);
   tmc_func_   = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_tmc);
   split_func_ = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_split);
-  join_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_join);
-  MST_ = std::make_unique<ModuleSlotTracker>(&M);
+  join_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_join);  
 }
 
-bool VortexBranchDivergence2::runOnFunction(Function &F) {
+bool VortexBranchDivergence3::runOnFunction(Function &F) {
   // Check if the Vortex extension is enabled
   const auto &TPC = getAnalysis<TargetPassConfig>();
   const auto &TM = TPC.getTM<TargetMachine>();
@@ -1286,7 +1510,7 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
   if (!ST.hasExtVortex())
     return false;
 
-  LLVM_DEBUG(dbgs() << "*** Vortex Divergent Branch Handling Pass2 ***\n");
+  LLVM_DEBUG(dbgs() << "*** Vortex Divergent Branch Handling Pass3 ***\n");
 
   this->initialize(*F.getParent(), ST);
 
@@ -1298,9 +1522,12 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
   DT_ = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   PDT_= &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
 
-  MST_->incorporateFunction(F); 
-
-  LLVM_DEBUG(dbgs() << "*** before changes!\n" << F << "\n");
+  namePrinter_.init(&F);
+  replaceSuccessor_.init(&F);
+    
+  LLVM_DEBUG(dbgs() << "*** Region info\n");
+  LLVM_DEBUG(RI_->getTopLevelRegion()->dump());
+  LLVM_DEBUG(dbgs() << "\n");
 
   for (auto I = df_begin(&F.getEntryBlock()),
             E = df_end(&F.getEntryBlock()); I != E; ++I) {
@@ -1312,13 +1539,19 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
 
     // only process conditional branches
     if (Br->isUnconditional()) {
-      LLVM_DEBUG(dbgs() << "*** skip non-conditional branch: " << PrintBBName(BB) << "\n");
+      LLVM_DEBUG(dbgs() << "*** skip non-conditional branch: " << namePrinter_.BBName(BB) << "\n");
       continue;
     }
 
     // only process divergent branches
     if (DA_->isUniform(Br)) {
-      LLVM_DEBUG(dbgs() << "*** skip uniform branch: " << PrintBBName(BB) << "\n");
+      LLVM_DEBUG(dbgs() << "*** skip uniform branch: " << namePrinter_.BBName(BB) << "\n");
+      continue;
+    }
+
+    auto ipdom = PDT_->findNearestCommonDominator(Br->getSuccessor(0), Br->getSuccessor(1));
+    if (ipdom == nullptr) {
+      LLVM_DEBUG(dbgs() << "*** WARNING: block with no IPDOM:\n" << BB << "\n");
       continue;
     }
 
@@ -1326,84 +1559,48 @@ bool VortexBranchDivergence2::runOnFunction(Function &F) {
     if (loop) {
       if (std::find(loops_.begin(), loops_.end(), loop) == loops_.end()) {
         // add new loop to the list
-        LLVM_DEBUG(dbgs() << "*** divergent loop:" << PrintBBName(loop->getHeader()) << "\n");
+        LLVM_DEBUG(dbgs() << "*** divergent loop: " << namePrinter_.BBName(loop->getHeader()) << "\n");
         loops_.push_back(loop);
       }
 
-      // check if the block is a nested branch
-      auto header = loop->getHeader();
-      auto ipdom = PDT_->findNearestCommonDominator(Br->getSuccessor(0), Br->getSuccessor(1));
+      // check if the block is a nested branch      
       if (loop->contains(ipdom)) {
         // add new branch to the list
-        LLVM_DEBUG(dbgs() << "*** divergent branch: " << PrintBBName(BB) << "\n");
+        LLVM_DEBUG(dbgs() << "*** divergent branch: " << namePrinter_.BBName(BB) << "\n");
         div_blocks_.push_back(BB);
       }
     } else {
       // add new branch to the list
-      LLVM_DEBUG(dbgs() << "*** divergent branch: " << PrintBBName(BB) << "\n");
+      LLVM_DEBUG(dbgs() << "*** divergent branch: " << namePrinter_.BBName(BB) << "\n");
       div_blocks_.push_back(BB);
     }    
   }
 
-  if (!div_blocks_.empty() 
-   || !loops_.empty()) {
-    // apply transformation    
+  // apply transformation
+  bool changed = false;    
+  if (!loops_.empty()) {
     this->processLoops(&context, &F);
-    this->processBranches(&context, &F);
-        
-    LLVM_DEBUG(dbgs() << "*** after changes!\n" << F << "\n");
-
-    div_blocks_.clear();
     loops_.clear();
-    phi_table_.clear();
+    changed = true;
+
+    // update PDT
+    PDT_->recalculate(F);
+  }
+
+  if (!div_blocks_.empty()) {
+    this->processBranches(&context, &F);
+    div_blocks_.clear();
+    changed = true;
+  }
+
+  if (changed) {        
+    LLVM_DEBUG(dbgs() << "*** after Pass3 changes!\n" << F << "\n");
   }
   
   return true;
 }
 
-static void EnsureNonNestedExitingBlocks(SmallVector <BasicBlock *, 8>& list, 
-                                         const std::vector<Loop*>& subloops) {
-  for (auto it = list.begin(), ite = list.end(); it != ite;) {    
-    bool nested = false;
-    for (auto subloop : subloops) {
-      if (subloop->contains(*it)) {
-        nested = true;
-        break;
-      }
-    }
-    if (nested) {
-      it  = list.erase(it);
-      ite = list.end();
-    } else {
-      ++it;
-    }
-  }
-}
-
-static void EnsureNonNestedExitBlocks(SmallVector <BasicBlock *, 8>& list, 
-                                      const std::vector<Loop*>& subloops) {
-  for (auto it = list.begin(), ite = list.end(); it != ite;) {  
-    bool nested = false;
-    for (auto pred : predecessors(*it)) {
-      for (auto subloop : subloops) {
-        if (subloop->contains(pred)) {
-          nested = true;
-          break;
-        }
-      }
-      if (nested)
-        break;
-    }
-    if (nested) {
-      it  = list.erase(it);
-      ite = list.end();
-    } else {
-      ++it;
-    }
-  }
-}
-
-void VortexBranchDivergence2::processLoops(LLVMContext* context, Function* function) {
+void VortexBranchDivergence3::processLoops(LLVMContext* context, Function* function) {
   // traverse the list in reverse order
   for (auto it = loops_.rbegin(), ite = loops_.rend(); it != ite; ++it) {
     auto loop = *it;
@@ -1418,164 +1615,121 @@ void VortexBranchDivergence2::processLoops(LLVMContext* context, Function* funct
     auto preheader_br = dyn_cast<BranchInst>(preheader_term);
     assert(preheader_br);
 
-    LLVM_DEBUG(dbgs() << "*** process loop: " << PrintBBName(header) << "\n");  
+    LLVM_DEBUG(dbgs() << "*** process loop: " << namePrinter_.BBName(header) << "\n");
 
     // save current thread mask in preheader
-    LLVM_DEBUG( dbgs() << "****** backup loop's tmask before preheader branch: " << PrintBBName(preheader) << "\n");
+    LLVM_DEBUG( dbgs() << "*** backup loop's tmask before preheader branch: " << namePrinter_.BBName(preheader) << "\n");
     auto tmask = CallInst::Create(tmask_func_, "tmask", preheader_br);
-
-    auto& subloops = loop->getSubLoops();
     
     // restore thread mask at loop exit blocks
     {
       SmallVector <BasicBlock *, 8> exiting_blocks;
       loop->getExitingBlocks(exiting_blocks); // blocks inside the loop going out
-      EnsureNonNestedExitingBlocks(exiting_blocks, subloops);
 
       for (auto exiting_block : exiting_blocks) {
-        // insert a predicate instruction to mask out threads that are exiting the loop
-        LLVM_DEBUG(dbgs() << "*** insert loop predicate at: " << PrintBBName(exiting_block) << "\n");
+        bool predicated = false;        
         auto branch = dyn_cast<BranchInst>(exiting_block->getTerminator());
-        IRBuilder<> ir_builder(branch);
-        auto cond = branch->getCondition();
-        auto not_cond = ir_builder.CreateNot(cond, PrintValueName(cond) + ".not");
-        auto not_cond_i32 = ir_builder.CreateIntCast(not_cond, ir_builder.getInt32Ty(), false, PrintValueName(not_cond) + ".i32");
-        CallInst::Create(pred_func_, not_cond_i32, "", branch);
+        for (auto exit_block : branch->successors()) {      
+          if (!loop->contains(exit_block)) {
+            if (!predicated) {
+              predicated = true;
+              // insert a predicate instruction to mask out threads that are exiting the loop
+              LLVM_DEBUG(dbgs() << "*** insert loop's predicate before exiting block branch: " << namePrinter_.BBName(exiting_block) << "\n");              
+              IRBuilder<> ir_builder(branch);
+              auto cond = branch->getCondition();
+              auto not_cond = ir_builder.CreateNot(cond, namePrinter_.ValueName(cond) + ".not");
+              auto not_cond_i32 = ir_builder.CreateIntCast(not_cond, ir_builder.getInt32Ty(), false, namePrinter_.ValueName(not_cond) + ".i32");
+              CallInst::Create(pred_func_, not_cond_i32, "", branch);
+            }
+
+            // restore thread mask before corresponding exit blocks
+            auto stub = BasicBlock::Create(*context, "loop_exit_stub", function, exit_block);
+            LLVM_DEBUG(dbgs() << "*** restore loop's tmask stub " << stub->getName() << " before exit block: " << namePrinter_.BBName(exit_block) << "\n");
+            auto stub_br = BranchInst::Create(exit_block, stub);
+            PDT_->addNewBlock(stub, exit_block);
+            CallInst::Create(tmc_func_, tmask, "", stub_br);        
+            replaceSuccessor_.replaceSuccessor(exiting_block, exit_block, stub);
+            if (PDT_->dominates(exit_block, exiting_block)) {
+              PDT_->changeImmediateDominator(exiting_block, stub);
+            }
+          }
+        }        
       }
-
-      SmallVector <BasicBlock *, 8> outside_blocks;
-      loop->getUniqueExitBlocks(outside_blocks); // destination blocks outside the loop
-      EnsureNonNestedExitBlocks(outside_blocks, subloops);
-
-      for (auto outside_block : outside_blocks) {
-        LLVM_DEBUG(dbgs() << "****** restore loop's tmask before external block: " << PrintBBName(outside_block) << "\n");
-        auto loop_exit_stub = BasicBlock::Create(*context, "loop_exit_stub", function, outside_block);
-        auto loop_exit_stub_br = BranchInst::Create(outside_block, loop_exit_stub);
-        PDT_->addNewBlock(loop_exit_stub, outside_block);
-        CallInst::Create(tmc_func_, tmask, "", loop_exit_stub_br);   
-        for (auto exiting_block : exiting_blocks) {
-          this->recurseReplaceSuccessor(exiting_block, outside_block, loop_exit_stub, false);
-        }
-      }      
     }
   }
 }
 
-void VortexBranchDivergence2::processBranches(LLVMContext* context, Function* function) {  
-  // traverse the list in reverse order
-  for (auto it = div_blocks_.rbegin(), ite = div_blocks_.rend(); it != ite; ++it) {
-    auto block = *it;
+void VortexBranchDivergence3::processBranches(LLVMContext* context, Function* function) {  
+  std::unordered_map<BasicBlock*, BasicBlock*> ipdoms;
+  std::unordered_map<BasicBlock*, std::unordered_map<Region*, BasicBlock*>> joins;
+
+  // pre-gather ipdoms for all divergent branches
+  for (auto bit = div_blocks_.rbegin(), bite = div_blocks_.rend(); bit != bite; ++bit) {
+    auto block = *bit;
     auto branch = dyn_cast<BranchInst>(block->getTerminator());
-    auto ipdom = PDT_->findNearestCommonDominator(branch->getSuccessor(0), branch->getSuccessor(1));
-    assert(ipdom);
-    
+    assert(branch);
+    ipdoms[block] = PDT_->findNearestCommonDominator(branch->getSuccessor(0), branch->getSuccessor(1));
+  }
+
+  // traverse the list in reverse order
+  for (auto bit = div_blocks_.rbegin(), bite = div_blocks_.rend(); bit != bite; ++bit) {
+    auto block = *bit;
+    auto ipdom = ipdoms[block];
+    auto branch = dyn_cast<BranchInst>(block->getTerminator());
+    assert(branch);
+
+    auto region = RI_->getRegionFor(block);
+
+    LLVM_DEBUG(dbgs() << "*** process branch " << namePrinter_.BBName(block) << ", region=" << region->getNameStr() << "\n");
+        
     // insert split instruction before divergent branch
-    LLVM_DEBUG(dbgs() << "*** insert split at: " << PrintBBName(block) << "\n");
+    LLVM_DEBUG(dbgs() << "*** insert split before " << namePrinter_.BBName(block) << "'s branch.\n");
     IRBuilder<> ir_builder(branch);
     auto cond = branch->getCondition();
-    auto cond_i32 = ir_builder.CreateIntCast(cond, ir_builder.getInt32Ty(), false, PrintValueName(cond) + ".i32");
+    auto cond_i32 = ir_builder.CreateIntCast(cond, ir_builder.getInt32Ty(), false, namePrinter_.ValueName(cond) + ".i32");
     CallInst::Create(split_func_, cond_i32, "", branch);
 
-    // insert join block before ipdom
-    LLVM_DEBUG(dbgs() << "*** insert join at: " << PrintBBName(ipdom) << "\n");
-    auto stub = BasicBlock::Create(*context, "join_stub", function, ipdom);
-    auto stub_br = BranchInst::Create(ipdom, stub);
-    CallInst::Create(join_func_, "", stub_br);
-    this->recurseReplaceSuccessor(block, ipdom, stub, true);      
-    PDT_->addNewBlock(stub, ipdom);
-  }
-}
+    // insert a join stub block before ipdom
 
-void VortexBranchDivergence2::recurseReplaceSuccessor(BasicBlock* pred, 
-                                                      BasicBlock* oldBB, 
-                                                      BasicBlock* newBB,
-                                                      bool recurse) {                    
-  DenseSet<const BasicBlock *> visited;
-  this->recurseReplaceSuccessor(visited, pred, oldBB, newBB, recurse);
-}
-
-void VortexBranchDivergence2::recurseReplaceSuccessor(DenseSet<const BasicBlock *>& visited, 
-                                                      BasicBlock* pred, 
-                                                      BasicBlock* oldBB, 
-                                                      BasicBlock* newBB,
-                                                      bool recurse) {
-  visited.insert(pred);
-  auto branch = dyn_cast<BranchInst>(pred->getTerminator());
-  if (branch) {
-    for (unsigned i = 0, n = branch->getNumSuccessors(); i < n; ++i) {
-      auto succ = branch->getSuccessor(i);
-      if (succ == oldBB) {
-        LLVM_DEBUG(dbgs() << "****** replace " << PrintBBName(pred) << ".succ[" << i << "]: " << PrintBBName(oldBB) << " with " << PrintBBName(newBB) << "\n");
-        branch->setSuccessor(i, newBB);
-        this->replacePhiDefs(oldBB, pred, newBB);
-      } else {        
-        if (recurse && visited.count(succ) == 0) {          
-          this->recurseReplaceSuccessor(visited, succ, oldBB, newBB, true);
-        }      
+    // if we have a block that is not a region head (nested)
+    // and if a join stub already exits at the ipdom and its owner shares the same region
+    // we should reuse the same stub due to potentional leaf block sharing between nested blocks
+    auto jit = joins.find(ipdom);
+    if ((jit != joins.end())
+     && (jit->second.count(region))
+     && block != region->getEntry()) {
+      auto stub = jit->second[region];
+      LLVM_DEBUG(dbgs() << "*** using existing join stub " << stub->getName() << "\n");
+      std::vector<BasicBlock*> succs;
+      replaceSuccessor_.findSuccessor(block, ipdom, succs);
+      for (auto succ : succs) {
+        if (succ == stub)
+          continue;
+        bool found = replaceSuccessor_.replaceSuccessor(succ, ipdom, stub);
+        assert(found);
+        PDT_->changeImmediateDominator(succ, stub);
+      }      
+    } else {        
+      auto stub = BasicBlock::Create(*context, "join_stub", function, ipdom);
+      LLVM_DEBUG(dbgs() << "*** insert join stub " << stub->getName() << " before " << namePrinter_.BBName(ipdom) << "\n");      
+      if (jit != joins.end()) {
+        for (auto x : joins[ipdom]) {
+          LLVM_DEBUG(dbgs() << "****** other join stub " << x.second->getName() << ", region=" << x.first->getNameStr() << "\n");
+        }
       }
-    }
-  }
-}
-
-void VortexBranchDivergence2::replacePhiDefs(BasicBlock* block, 
-                                             BasicBlock* oldBB, 
-                                             BasicBlock* newBB) {
-  // process all phi nodes in old successor
-  for (auto II = block->begin(), IE = block->end(); II != IE; ++II) {
-    PHINode *phi = dyn_cast<PHINode>(II);
-    if (!phi)
-      continue;
-
-    for (unsigned op = 0, nOps = phi->getNumOperands(); op != nOps; ++op) {
-      if (phi->getIncomingBlock(op) != oldBB)
-        continue;        
-
-      PHINode* phi_stub;
-      auto key = std::make_pair(phi, newBB);
-      auto entry = phi_table_.find(key);
-      if (entry != phi_table_.end()) {
-        phi_stub = entry->second;
-      } else {
-        // create corresponding Phi node in new block
-        phi_stub = PHINode::Create(phi->getType(), 1, phi->getName(), &newBB->front());
-        phi_table_[key] = phi_stub;
-
-        // add new phi to succesor's phi node
-        phi->addIncoming(phi_stub, newBB);
+      auto stub_br = BranchInst::Create(ipdom, stub);
+      CallInst::Create(join_func_, "", stub_br);
+      PDT_->addNewBlock(stub, ipdom);
+      std::vector<BasicBlock*> succs;
+      replaceSuccessor_.findSuccessor(block, ipdom, succs);
+      for (auto succ : succs) {
+        bool found = replaceSuccessor_.replaceSuccessor(succ, ipdom, stub);
+        assert(found);
+        PDT_->changeImmediateDominator(succ, stub);
       }
-
-      // move phi's operand into new phi node
-      Value *del_value = phi->removeIncomingValue(op);
-      phi_stub->addIncoming(del_value, oldBB);
+      joins[ipdom][region] = stub;      
     }
-  }  
-}
-
-std::string VortexBranchDivergence2::PrintValueName(llvm::Value* V) {
-  std::string str("V.");
-  if (V->hasName()) {    
-    str += std::string(V->getName().data(), V->getName().size());
-  } else {    
-    auto slot = MST_->getLocalSlot(V);
-    str += std::to_string(slot);
   }
-  return str;
-}
-
-std::string VortexBranchDivergence2::PrintBBName(llvm::BasicBlock* BB) {
-  std::string str("BB.");
-  if (BB->hasName()) {    
-    str += std::string(BB->getName().data(), BB->getName().size());
-  } else {
-    auto slot = MST_->getLocalSlot(&BB->front());
-    if (slot > 0) {
-      str += std::to_string(slot - 1);
-    } else {
-      str = "";
-      dbgs() << "(" << BB->front() << ")";
-    }
-  }  
-  return str;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
