@@ -49,8 +49,11 @@ void initializeVortexBranchDivergence0Pass(PassRegistry&);
 FunctionPass *createVortexBranchDivergence1Pass();
 void initializeVortexBranchDivergence1Pass(PassRegistry&);
 
-FunctionPass *createVortexBranchDivergence2Pass();
+FunctionPass *createVortexBranchDivergence2ass();
 void initializeVortexBranchDivergence2Pass(PassRegistry&);
+
+FunctionPass *createVortexBranchDivergence3Pass();
+void initializeVortexBranchDivergence3Pass(PassRegistry&);
 
 InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
                                                     RISCVSubtarget &,
