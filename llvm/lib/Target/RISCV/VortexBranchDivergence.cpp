@@ -1297,46 +1297,6 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-// Recurse through all subregions and all regions  into RQ.
-static void addRegionIntoQueue(Region &R, std::deque<Region *> &RQ) {
-  RQ.push_back(&R);
-  for (const auto &E : R)
-    addRegionIntoQueue(*E, RQ);
-}
-
-static bool isDivergentLoopRegion(Region *R, 
-                                  LoopInfo *LI,
-                                  LegacyDivergenceAnalysis *DA,
-                                  DominatorTree *DT,
-                                  PostDominatorTree *PDT) {
-  for (auto E : R->elements()) {
-    if (E->isSubRegion())
-      continue;
-    auto BB = E->getEntry();
-    auto Br = dyn_cast<BranchInst>(BB->getTerminator());
-    if (!Br || !Br->isConditional())
-      continue;
-    if (DA->isUniform(Br))
-      continue;
-    
-    auto succ0 = Br->getSuccessor(0);
-    auto succ1 = Br->getSuccessor(1);
-    auto ipdom = PDT->findNearestCommonDominator(succ0, succ1);
-    if (!ipdom)
-      continue;
-
-    auto loop = LI->getLoopFor(BB);
-    if (!loop)
-      continue;
-
-    if (LI->getLoopFor(ipdom) == loop)
-      continue;
-
-    return true;
-  }
-  return false;
-}
-
 char VortexBranchDivergence1::ID = 0;
 
 VortexBranchDivergence1::VortexBranchDivergence1() : FunctionPass(ID) {
@@ -1369,6 +1329,8 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
 
   LLVM_DEBUG(dbgs() << "*** Vortex Divergent Branch Handling Pass1 ***\n");
 
+  LLVM_DEBUG(dbgs() << "*** before Pass1 changes!\n" << F << "\n");
+
   auto *TTIWP = getAnalysisIfAvailable<TargetTransformInfoWrapperPass>();
   if (TTIWP == nullptr)
     return false;
@@ -1381,28 +1343,52 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
   auto DT  = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   auto PDT = &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
 
-  std::deque<Region *> RQ;
-  addRegionIntoQueue(*RI->getTopLevelRegion(), RQ);
+  // Gather the list of regions to structurize
+  // these are region that contains divergent branches that do not form a region (single-entry-single-exit)
 
-  auto SCFG = std::make_unique<StructurizeCFG>(context, DT, LI); 
+  DenseSet<Region*> regions;
 
-  bool changed = false;
-  while (!RQ.empty()) {
-    auto region = RQ.back();      
-    if (isDivergentLoopRegion(region, LI, DA, DT, PDT)) {
-      LLVM_DEBUG(dbgs() << "*** structurize region: " << region->getNameStr() << "\n");
-      LLVM_DEBUG(region->dump());
-      changed |= SCFG->runOnRegion(region);
-    } else {
-      LLVM_DEBUG(dbgs() << "*** skip region: " << region->getNameStr() << "\n");
-    }      
-    RQ.pop_back();
+  for (auto I = df_begin(&F.getEntryBlock()),
+            E = df_end(&F.getEntryBlock()); I != E; ++I) {
+    auto BB = *I;
+    
+    auto Br = dyn_cast<BranchInst>(BB->getTerminator());
+    if (!Br)
+      continue;
+
+    if (Br->isUnconditional())
+      continue;
+    
+    if (DA->isUniform(Br))
+      continue;
+
+    auto ipdom = PDT->findNearestCommonDominator(Br->getSuccessor(0), Br->getSuccessor(1));
+    if (ipdom == nullptr)
+      continue;
+
+    auto loop = LI->getLoopFor(BB);
+    if (loop == nullptr 
+     || loop->contains(ipdom)) {
+      auto region = RI->getRegionFor(BB);
+      if (BB != region->getEntry()) {
+        // this divergent block doesn't form a region
+        if (regions.insert(region).second) {
+          LLVM_DEBUG(dbgs() << "*** Structurize region for " << BB->getName() << "\n");
+          LLVM_DEBUG(region->dump());
+          LLVM_DEBUG(dbgs() << "\n");          
+        }
+      }
+    }    
   }
 
-  if (changed) {
+  if (!regions.empty()) {
+    auto SCFG = std::make_unique<StructurizeCFG>(context, DT, LI);
+    for (auto region : regions) {      
+      SCFG->runOnRegion(region);
+    }
     LLVM_DEBUG(dbgs() << "*** after Pass1 changes!\n" << F << "\n");
   }
-  
+
   return true;
 }
 
@@ -1525,7 +1511,7 @@ bool VortexBranchDivergence3::runOnFunction(Function &F) {
   namePrinter_.init(&F);
   replaceSuccessor_.init(&F);
     
-  LLVM_DEBUG(dbgs() << "*** Region info\n");
+  LLVM_DEBUG(dbgs() << "*** Region info:\n");
   LLVM_DEBUG(RI_->getTopLevelRegion()->dump());
   LLVM_DEBUG(dbgs() << "\n");
 
@@ -1661,9 +1647,8 @@ void VortexBranchDivergence3::processLoops(LLVMContext* context, Function* funct
 
 void VortexBranchDivergence3::processBranches(LLVMContext* context, Function* function) {  
   std::unordered_map<BasicBlock*, BasicBlock*> ipdoms;
-  std::unordered_map<BasicBlock*, std::unordered_map<Region*, BasicBlock*>> joins;
 
-  // pre-gather ipdoms for all divergent branches
+  // pre-gather ipdoms for divergent branches
   for (auto bit = div_blocks_.rbegin(), bite = div_blocks_.rend(); bit != bite; ++bit) {
     auto block = *bit;
     auto branch = dyn_cast<BranchInst>(block->getTerminator());
@@ -1690,44 +1675,17 @@ void VortexBranchDivergence3::processBranches(LLVMContext* context, Function* fu
     CallInst::Create(split_func_, cond_i32, "", branch);
 
     // insert a join stub block before ipdom
-
-    // if we have a block that is not a region head (nested)
-    // and if a join stub already exits at the ipdom and its owner shares the same region
-    // we should reuse the same stub due to potentional leaf block sharing between nested blocks
-    auto jit = joins.find(ipdom);
-    if ((jit != joins.end())
-     && (jit->second.count(region))
-     && block != region->getEntry()) {
-      auto stub = jit->second[region];
-      LLVM_DEBUG(dbgs() << "*** using existing join stub " << stub->getName() << "\n");
-      std::vector<BasicBlock*> succs;
-      replaceSuccessor_.findSuccessor(block, ipdom, succs);
-      for (auto succ : succs) {
-        if (succ == stub)
-          continue;
-        bool found = replaceSuccessor_.replaceSuccessor(succ, ipdom, stub);
-        assert(found);
-        PDT_->changeImmediateDominator(succ, stub);
-      }      
-    } else {        
-      auto stub = BasicBlock::Create(*context, "join_stub", function, ipdom);
-      LLVM_DEBUG(dbgs() << "*** insert join stub " << stub->getName() << " before " << namePrinter_.BBName(ipdom) << "\n");      
-      if (jit != joins.end()) {
-        for (auto x : joins[ipdom]) {
-          LLVM_DEBUG(dbgs() << "****** other join stub " << x.second->getName() << ", region=" << x.first->getNameStr() << "\n");
-        }
-      }
-      auto stub_br = BranchInst::Create(ipdom, stub);
-      CallInst::Create(join_func_, "", stub_br);
-      PDT_->addNewBlock(stub, ipdom);
-      std::vector<BasicBlock*> succs;
-      replaceSuccessor_.findSuccessor(block, ipdom, succs);
-      for (auto succ : succs) {
-        bool found = replaceSuccessor_.replaceSuccessor(succ, ipdom, stub);
-        assert(found);
-        PDT_->changeImmediateDominator(succ, stub);
-      }
-      joins[ipdom][region] = stub;      
+    auto stub = BasicBlock::Create(*context, "join_stub", function, ipdom);
+    LLVM_DEBUG(dbgs() << "*** insert join stub " << stub->getName() << " before " << namePrinter_.BBName(ipdom) << "\n");
+    auto stub_br = BranchInst::Create(ipdom, stub);
+    CallInst::Create(join_func_, "", stub_br);
+    PDT_->addNewBlock(stub, ipdom);
+    std::vector<BasicBlock*> succs;
+    replaceSuccessor_.findSuccessor(block, ipdom, succs);
+    for (auto succ : succs) {
+      bool found = replaceSuccessor_.replaceSuccessor(succ, ipdom, stub);
+      assert(found);
+      PDT_->changeImmediateDominator(succ, stub);
     }
   }
 }
