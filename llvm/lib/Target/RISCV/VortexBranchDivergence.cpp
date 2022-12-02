@@ -1693,30 +1693,32 @@ void VortexBranchDivergence3::processBranches(LLVMContext* context, Function* fu
 ///////////////////////////////////////////////////////////////////////////////
 
 DivergenceTracker::DivergenceTracker(const Function &function) {
-  auto module = function.getParent();
+  DenseSet<const Value *> dv_annotations;
+  DenseSet<const Value *> uv_annotations;
 
-  ModuleSlotTracker MST(module);
-  MST.incorporateFunction(function);
+  auto module = function.getParent();
 
   // Mark all TLS globals as divergent
   for (auto& GV : module->getGlobalList()) {
     if (GV.isThreadLocal()) {
       if (dv_nodes_.insert(&GV).second) {
-        LLVM_DEBUG(dbgs() << "*** Divergent TLS variable\n" << GV << "\n");
+        LLVM_DEBUG(dbgs() << "*** divergent variable:\n" << GV << "\n");
       }
     }
   }   
-  
+
   for (auto& BB : function) {
     for (auto& I : BB) {
       if (I.getMetadata("vortex.uniform") != NULL) {
+        uv_annotations.insert(&I);
         uv_nodes_.insert(&I);
-        LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(&I) << "\n" << I << "\n");
+        LLVM_DEBUG(dbgs() << "*** uniform annotation:\n" << I << "\n");
       } else
       if (I.getMetadata("vortex.divergent") != NULL 
        || I.getMetadata("divergent") != NULL) {
+        dv_annotations.insert(&I);
         dv_nodes_.insert(&I);
-        LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(&I) << "\n" << I << "\n");
+        LLVM_DEBUG(dbgs() << "*** divergent annotation:\n" << I << "\n");
       } else
       if (auto II = dyn_cast<llvm::IntrinsicInst>(&I)) {
         // process Vortex's annotate("vortex.uniform")) attribute
@@ -1727,27 +1729,61 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
           if (cda->getAsCString() == "vortex.uniform") {
             auto var = II->getOperand(0);
             if (auto AI = dyn_cast<AllocaInst>(var)) {
+              uv_annotations.insert(var);
               uv_nodes_.insert(var);
-              LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(AI) << "\n" << *AI << "\n");
+              LLVM_DEBUG(dbgs() << "*** uniform annotation:\n" << *AI << "\n");
             } else 
             if (auto CI = dyn_cast<CastInst>(var)) {
               auto var2 = CI->getOperand(0);              
+              uv_annotations.insert(var2);
               uv_nodes_.insert(var2);
-              LLVM_DEBUG(dbgs() << "*** Uniform annotation: %" << MST.getLocalSlot(var2) << "\n" << *var2 << "\n");
+              LLVM_DEBUG(dbgs() << "*** uniform annotation:\n" << *var2 << "\n");
             }                        
           } else 
           if (cda->getAsCString() == "vortex.divergent" 
            || cda->getAsCString() == "divergent") {
             auto var = II->getOperand(0);
             if (auto AI = dyn_cast<AllocaInst>(var)) {
+              dv_annotations.insert(var);
               dv_nodes_.insert(var);
-              LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(AI) << "\n" << *AI << "\n");
+              LLVM_DEBUG(dbgs() << "*** divergent annotation:\n" << *AI << "\n");
             } else 
             if (auto CI = dyn_cast<CastInst>(var)) {
               auto var2 = CI->getOperand(0);              
+              dv_annotations.insert(var2);
               dv_nodes_.insert(var2);
-              LLVM_DEBUG(dbgs() << "*** Divergent annotation: %" << MST.getLocalSlot(var2) << "\n" << *var2 << "\n");
+              LLVM_DEBUG(dbgs() << "*** divergent annotation:\n" << *var2 << "\n");
             }                        
+          }
+        }
+      }
+    }
+  }
+   
+  for (auto& BB : function) {
+    for (auto& I : BB) {
+      if (auto SI = dyn_cast<StoreInst>(&I)) {
+        auto addr = SI->getPointerOperand();
+        if (uv_annotations.count(addr) != 0) {
+          auto value = SI->getValueOperand();
+          if (auto CI = dyn_cast<CastInst>(value)) {  
+            auto src = CI->getOperand(0);
+            LLVM_DEBUG(dbgs() << "*** uniform variable:\n" << *src << "\n");
+            uv_nodes_.insert(src);
+          } else {
+            LLVM_DEBUG(dbgs() << "*** uniform variable:\n" << *value << "\n");
+            uv_nodes_.insert(value);
+          }
+        } else
+        if (dv_annotations.count(addr) != 0) {
+          auto value = SI->getValueOperand();
+          if (auto CI = dyn_cast<CastInst>(value)) {  
+            auto src = CI->getOperand(0);
+            LLVM_DEBUG(dbgs() << "*** divergent variable:\n" << *src << "\n");
+            dv_nodes_.insert(src);
+          } else {
+            LLVM_DEBUG(dbgs() << "*** divergent variable:\n" << *value << "\n");
+            dv_nodes_.insert(value);
           }
         }
       }
@@ -1757,20 +1793,28 @@ DivergenceTracker::DivergenceTracker(const Function &function) {
 
 bool DivergenceTracker::eval(const Value *V) {
   // Mark variable as uniform is specified via aannotation
-  if (uv_nodes_.count(V) != 0)
+  if (uv_nodes_.count(V) != 0) {
+    LLVM_DEBUG(dbgs() << "*** uniform variable:\n" << *V << "\n");
     return false;
+  }
 
   // Mark variable with divergent is detected as TLS
-  if (dv_nodes_.count(V) != 0)
+  if (dv_nodes_.count(V) != 0) {
+    LLVM_DEBUG(dbgs() << "*** divergent variable:\n" << *V << "\n");
     return true;
+  }
 
   // We conservatively assume all function arguments to potentially be divergent
-  if (isa<Argument>(V))
+  if (isa<Argument>(V)) {
+    LLVM_DEBUG(dbgs() << "*** divergent variable:\n" << *V << "\n");
     return true;
+  }
 
   // We conservatively assume function return values are divergent
-  if (isa<CallInst>(V))
+  if (isa<CallInst>(V)) {
+    LLVM_DEBUG(dbgs() << "*** divergent variable:\n" << *V << "\n");
     return true;
+  }
     
   // Atomics are divergent because they are executed sequentially: when an
   // atomic operation refers to the same address in each thread, then each
@@ -1778,14 +1822,17 @@ bool DivergenceTracker::eval(const Value *V) {
   // original value.
   if (isa<AtomicRMWInst>(V) 
    || isa<AtomicCmpXchgInst>(V)) {
+    LLVM_DEBUG(dbgs() << "*** divergent variable:\n" << *V << "\n");
     return true;  
   }
 
   // Mark loads from divergent addresses as divergent
   if (auto LD = dyn_cast<LoadInst>(V)) {  
     auto addr = LD->getPointerOperand();
-    if (dv_nodes_.count(addr) != 0)
+    if (dv_nodes_.count(addr) != 0) {
+      LLVM_DEBUG(dbgs() << "*** divergent variable:\n" << *V << "\n");
       return true;
+    }
   }
 
   return false;
