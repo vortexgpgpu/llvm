@@ -84,7 +84,9 @@ using namespace llvm;
 
 #define DEBUG_TYPE "divergence"
 
-//#define LLVM_DEBUG(x) do {x;} while (false)
+#ifndef NDEBUG
+#define LLVM_DEBUG(x) do {x;} while (false)
+#endif
 
 // transparently use the GPUDivergenceAnalysis
 static cl::opt<bool> UseGPUDA("use-gpu-divergence-analysis", cl::init(false),
@@ -134,7 +136,6 @@ void DivergencePropagator::populateWithSourcesOfDivergence() {
 
   for (auto &Arg : F.args()) {
     if (TTI.isSourceOfDivergence(&Arg)) {
-      LLVM_DEBUG(dbgs() << "*** divergent function argument\n" << Arg << "\n");
       Worklist.push_back(&Arg);
       DV.insert(&Arg);
     }
@@ -142,7 +143,6 @@ void DivergencePropagator::populateWithSourcesOfDivergence() {
 
   for (auto &I : instructions(F)) {
     if (TTI.isSourceOfDivergence(&I)) {
-      LLVM_DEBUG(dbgs() << "*** divergent instruction\n" << I << "\n");
       Worklist.push_back(&I);
       DV.insert(&I);
     }

@@ -35,13 +35,10 @@
 #include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 using namespace llvm;
 
-// Vortex extension passes
-namespace llvm {
-FunctionPass *createVortexBranchDivergence0Pass();
-FunctionPass *createVortexBranchDivergence1Pass();
-FunctionPass *createVortexBranchDivergence2Pass();
-FunctionPass *createVortexBranchDivergence3Pass();
-}
+static cl::opt<int> EnableVortexBranchDivergence(
+  "vortex-branch-divergence",
+  cl::desc("Enable Branch Divergence Instrumentation"),
+  cl::init(1));
 
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   RegisterTargetMachine<RISCVTargetMachine> X(getTheRISCV32Target());
@@ -49,8 +46,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   auto PR = PassRegistry::getPassRegistry();
   initializeGlobalISel(*PR);
   initializeRISCVExpandPseudoPass(*PR);
-  initializeVortexBranchDivergence1Pass(*PR);
-  initializeVortexBranchDivergence2Pass(*PR);
+  initializeVortexBranchDivergencePass(*PR);
 }
 
 static StringRef computeDataLayout(const Triple &TT) {
@@ -132,11 +128,8 @@ class RISCVPassConfig : public TargetPassConfig {
 public:
   RISCVPassConfig(RISCVTargetMachine &TM, PassManagerBase &PM)
       : TargetPassConfig(TM, PM)
-      , isVortex_(false) {
-    if (TM.isVortex()) {
-      isVortex_ = true;
-    }
-  }
+      , isVortex_(TM.isVortex()) 
+  {}
 
   RISCVTargetMachine &getRISCVTargetMachine() const {
     return getTM<RISCVTargetMachine>();
@@ -190,7 +183,9 @@ bool RISCVPassConfig::addGlobalInstructionSelect() {
   return false;
 }
 
-void RISCVPassConfig::addPreEmitPass() { addPass(&BranchRelaxationPassID); }
+void RISCVPassConfig::addPreEmitPass() { 
+  addPass(&BranchRelaxationPassID); 
+}
 
 void RISCVPassConfig::addPreEmitPass2() {
   // Schedule the expansion of AMOs at the last possible moment, avoiding the
@@ -204,14 +199,13 @@ void RISCVPassConfig::addPreRegAlloc() {
 }
 
 bool RISCVPassConfig::addPreISel() {
-  if (isVortex_) {
+   if (getRISCVTargetMachine().isVortex() 
+    && EnableVortexBranchDivergence != 0) {
     addPass(createLowerSwitchPass());
-    addPass(createFlattenCFGPass());    
-    //addPass(createStructurizeCFGPass());
-    //addPass(createVortexBranchDivergence0Pass());
-    addPass(createVortexBranchDivergence1Pass());
-    //addPass(createVortexBranchDivergence2Pass());
-    addPass(createVortexBranchDivergence3Pass());
+    addPass(createFlattenCFGPass()); 
+    addPass(createLoopSimplifyCFGPass());   
+    addPass(createStructurizeCFGPass(true, (EnableVortexBranchDivergence > 1)));
+    addPass(createVortexBranchDivergencePass());
   }
   return false;
 }

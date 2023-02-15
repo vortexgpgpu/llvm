@@ -18,6 +18,7 @@
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/RegionIterator.h"
 #include "llvm/Analysis/RegionPass.h"
+#include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
@@ -52,6 +53,10 @@ using namespace llvm;
 using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "structurizecfg"
+
+#ifndef NDEBUG
+#define LLVM_DEBUG(x) do {x;} while (false)
+#endif
 
 // The name for newly created blocks.
 static const char *const FlowBlockName = "Flow";
@@ -181,6 +186,8 @@ public:
 /// breaks and the false values expresses continue states.
 class StructurizeCFG : public RegionPass {
   bool SkipUniformRegions;
+  bool SkipRegionalBranches;
+  std::unique_ptr<DenseSet<Region*>> skipRegions;
 
   Type *Boolean;
   ConstantInt *BoolTrue;
@@ -257,12 +264,18 @@ class StructurizeCFG : public RegionPass {
 
   void rebuildSSA();
 
+  void skipRegionalBranches(Region *R, 
+                            LegacyDivergenceAnalysis *DA,
+                            PostDominatorTree* PDT);
+
 public:
   static char ID;
 
-  explicit StructurizeCFG(bool SkipUniformRegions_ = false)
+  explicit StructurizeCFG(bool SkipUniformRegions_ = false,
+                          bool SkipRegionalBranches_ = false)
       : RegionPass(ID),
-        SkipUniformRegions(SkipUniformRegions_) {
+        SkipUniformRegions(SkipUniformRegions_),
+        SkipRegionalBranches(SkipRegionalBranches_) {
     if (ForceSkipUniformRegions.getNumOccurrences())
       SkipUniformRegions = ForceSkipUniformRegions.getValue();
     initializeStructurizeCFGPass(*PassRegistry::getPassRegistry());
@@ -275,8 +288,12 @@ public:
   StringRef getPassName() const override { return "Structurize control flow"; }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    if (SkipUniformRegions)
+    if (SkipUniformRegions || SkipRegionalBranches) {
       AU.addRequired<LegacyDivergenceAnalysis>();
+    }
+    if (SkipRegionalBranches) {
+      AU.addRequired<PostDominatorTreeWrapperPass>();
+    }
     AU.addRequiredID(LowerSwitchID);
     AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<LoopInfoWrapperPass>();
@@ -295,6 +312,7 @@ INITIALIZE_PASS_BEGIN(StructurizeCFG, "structurizecfg", "Structurize the CFG",
 INITIALIZE_PASS_DEPENDENCY(LegacyDivergenceAnalysis)
 INITIALIZE_PASS_DEPENDENCY(LowerSwitch)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(PostDominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(RegionInfoPass)
 INITIALIZE_PASS_END(StructurizeCFG, "structurizecfg", "Structurize the CFG",
                     false, false)
@@ -995,6 +1013,61 @@ static bool hasOnlyUniformBranches(Region *R, unsigned UniformMDKindID,
   return SubRegionsAreUniform || (ConditionalDirectChildren <= 1);
 }
 
+void StructurizeCFG::skipRegionalBranches(Region *R, 
+                                          LegacyDivergenceAnalysis *DA,
+                                          PostDominatorTree* PDT) {
+  LLVM_DEBUG(dbgs() << "*** structurize: begin region: " << *R << "\n");
+
+  for (auto E : R->elements()) {
+    if (!E->isSubRegion())
+      continue;
+
+    auto SR = E->getNodeAs<Region>();      
+    this->skipRegionalBranches(SR, DA, PDT);
+  }
+  
+  for (auto E : R->elements()) {   
+    if (E->isSubRegion())
+      continue;
+
+    auto BB = E->getEntry();      
+    LLVM_DEBUG(dbgs() << "*** structurize: block: " << *BB << "\n");
+    auto Br = dyn_cast<BranchInst>(BB->getTerminator());
+    if (Br == nullptr)
+      continue;
+    if (!Br->isConditional())
+      continue;
+    if (DA->isUniform(Br))
+      continue;
+
+    auto ipdom = PDT->findNearestCommonDominator(Br->getSuccessor(0), Br->getSuccessor(1));
+    if (ipdom == nullptr) {
+      LLVM_DEBUG(dbgs() << "*** structurize: divergent branch with no ipdom: " << *R << "\n");
+      skipRegions->insert(R);
+      break;
+    }
+
+    // skip loop nodes
+    auto loop = LI->getLoopFor(BB);
+    if (loop && !loop->contains(ipdom)) {
+      LLVM_DEBUG(dbgs() << "*** structurize: skip divergent loop block\n");
+      continue;
+    }
+
+    if (BB == R->getEntry()) {
+      LLVM_DEBUG(dbgs() << "*** structurize: skip divergent complete region\n");
+      continue;
+    }
+
+    // this basic block is divergent and non-regional
+    LLVM_DEBUG(dbgs() << "*** structurize: divergent non-regional block: " << *R << "\n");
+    skipRegions->insert(R);
+    break;
+  }
+
+  LLVM_DEBUG(dbgs() << "*** structurize: end region\n");
+}
+
 /// Run the transformation for each region found
 bool StructurizeCFG::runOnRegion(Region *R, RGPassManager &RGM) {
   if (R->isTopLevelRegion())
@@ -1031,12 +1104,30 @@ bool StructurizeCFG::runOnRegion(Region *R, RGPassManager &RGM) {
       return false;
     }
   }
+  LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+
+  if (SkipRegionalBranches) {
+    if (!skipRegions) {
+      skipRegions.reset(new DenseSet<Region*>());
+      auto DA  = &getAnalysis<LegacyDivergenceAnalysis>();    
+      auto PDT = &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
+      // find the top parent region
+      Region* P = R;
+      while (P->getParent() != nullptr) {
+        P = P->getParent();
+      }
+      this->skipRegionalBranches(P, DA, PDT);
+    }
+    if (!skipRegions->count(R))
+      return false;
+
+    LLVM_DEBUG(dbgs() << "*** structurizing: " << *R << "\n");
+  }
 
   Func = R->getEntry()->getParent();
   ParentRegion = R;
 
   DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
 
   orderNodes();
   collectInfos();
@@ -1060,6 +1151,7 @@ bool StructurizeCFG::runOnRegion(Region *R, RGPassManager &RGM) {
   return true;
 }
 
-Pass *llvm::createStructurizeCFGPass(bool SkipUniformRegions) {
-  return new StructurizeCFG(SkipUniformRegions);
+Pass *llvm::createStructurizeCFGPass(bool SkipUniformRegions, 
+                                     bool SkipRegionalBranches) {
+  return new StructurizeCFG(SkipUniformRegions, SkipRegionalBranches);
 }

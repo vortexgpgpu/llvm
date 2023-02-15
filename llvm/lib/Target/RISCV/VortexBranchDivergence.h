@@ -5,14 +5,18 @@ namespace vortex {
 using namespace llvm;
 
 class DivergenceTracker {
-private:
-    DenseSet<const Value *> dv_nodes_;
-    DenseSet<const Value *> uv_nodes_;
-
 public:
     DivergenceTracker(const Function &function);
 
     bool eval(const Value *V);
+
+private:    
+    void initialize();
+
+    DenseSet<const Value *> dv_nodes_;
+    DenseSet<const Value *> uv_nodes_;
+    const Function* function_;
+    bool initialized_;   
 };
 
 }
