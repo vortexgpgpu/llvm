@@ -46,7 +46,10 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   auto PR = PassRegistry::getPassRegistry();
   initializeGlobalISel(*PR);
   initializeRISCVExpandPseudoPass(*PR);
-  initializeVortexBranchDivergencePass(*PR);
+  if (EnableVortexBranchDivergence != 0) {
+    initializeVortexBranchDivergence0Pass(*PR);
+    initializeVortexBranchDivergence1Pass(*PR);
+  }
 }
 
 static StringRef computeDataLayout(const Triple &TT) {
@@ -201,11 +204,13 @@ void RISCVPassConfig::addPreRegAlloc() {
 bool RISCVPassConfig::addPreISel() {
    if (getRISCVTargetMachine().isVortex() 
     && EnableVortexBranchDivergence != 0) {
+    addPass(createSinkingPass());
+    addPass(createLoopSimplifyCFGPass());
     addPass(createLowerSwitchPass());
-    addPass(createFlattenCFGPass()); 
-    addPass(createLoopSimplifyCFGPass());   
+    addPass(createFlattenCFGPass());
+    addPass(createVortexBranchDivergence0Pass());
     addPass(createStructurizeCFGPass(true, (EnableVortexBranchDivergence > 1)));
-    addPass(createVortexBranchDivergencePass());
+    addPass(createVortexBranchDivergence1Pass(EnableVortexBranchDivergence));
   }
   return false;
 }

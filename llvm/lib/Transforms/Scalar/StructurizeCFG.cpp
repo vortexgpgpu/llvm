@@ -187,7 +187,6 @@ public:
 class StructurizeCFG : public RegionPass {
   bool SkipUniformRegions;
   bool SkipRegionalBranches;
-  std::unique_ptr<DenseSet<Region*>> skipRegions;
 
   Type *Boolean;
   ConstantInt *BoolTrue;
@@ -264,7 +263,7 @@ class StructurizeCFG : public RegionPass {
 
   void rebuildSSA();
 
-  void skipRegionalBranches(Region *R, 
+  bool skipRegionalBranches(Region *R, 
                             LegacyDivergenceAnalysis *DA,
                             PostDominatorTree* PDT);
 
@@ -298,7 +297,7 @@ public:
     AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<LoopInfoWrapperPass>();
 
-    AU.addPreserved<DominatorTreeWrapperPass>();
+    //AU.addPreserved<DominatorTreeWrapperPass>();
     RegionPass::getAnalysisUsage(AU);
   }
 };
@@ -1013,25 +1012,14 @@ static bool hasOnlyUniformBranches(Region *R, unsigned UniformMDKindID,
   return SubRegionsAreUniform || (ConditionalDirectChildren <= 1);
 }
 
-void StructurizeCFG::skipRegionalBranches(Region *R, 
+bool StructurizeCFG::skipRegionalBranches(Region *R, 
                                           LegacyDivergenceAnalysis *DA,
-                                          PostDominatorTree* PDT) {
-  LLVM_DEBUG(dbgs() << "*** structurize: begin region: " << *R << "\n");
-
-  for (auto E : R->elements()) {
-    if (!E->isSubRegion())
-      continue;
-
-    auto SR = E->getNodeAs<Region>();      
-    this->skipRegionalBranches(SR, DA, PDT);
-  }
-  
+                                          PostDominatorTree* PDT) {  
   for (auto E : R->elements()) {   
     if (E->isSubRegion())
       continue;
 
-    auto BB = E->getEntry();      
-    LLVM_DEBUG(dbgs() << "*** structurize: block: " << *BB << "\n");
+    auto BB = E->getEntry();
     auto Br = dyn_cast<BranchInst>(BB->getTerminator());
     if (Br == nullptr)
       continue;
@@ -1040,36 +1028,22 @@ void StructurizeCFG::skipRegionalBranches(Region *R,
     if (DA->isUniform(Br))
       continue;
 
-    auto ipdom = PDT->findNearestCommonDominator(Br->getSuccessor(0), Br->getSuccessor(1));
-    if (ipdom == nullptr) {
-      LLVM_DEBUG(dbgs() << "*** structurize: divergent branch with no ipdom: " << *R << "\n");
-      skipRegions->insert(R);
-      break;
-    }
-
-    // skip loop nodes
-    auto loop = LI->getLoopFor(BB);
-    if (loop && !loop->contains(ipdom)) {
-      LLVM_DEBUG(dbgs() << "*** structurize: skip divergent loop block\n");
-      continue;
-    }
-
     if (BB == R->getEntry()) {
-      LLVM_DEBUG(dbgs() << "*** structurize: skip divergent complete region\n");
+      LLVM_DEBUG(dbgs() << "*** structurize: skip divergent complete region " << *R << "\n");
       continue;
     }
 
     // this basic block is divergent and non-regional
     LLVM_DEBUG(dbgs() << "*** structurize: divergent non-regional block: " << *R << "\n");
-    skipRegions->insert(R);
-    break;
+    return true;
   }
 
-  LLVM_DEBUG(dbgs() << "*** structurize: end region\n");
+  return false;
 }
 
 /// Run the transformation for each region found
 bool StructurizeCFG::runOnRegion(Region *R, RGPassManager &RGM) {
+  LLVM_DEBUG(dbgs() << "*** StructurizeCFG::runOnRegion(" << *R  << ")\n");
   if (R->isTopLevelRegion())
     return false;
 
@@ -1107,22 +1081,13 @@ bool StructurizeCFG::runOnRegion(Region *R, RGPassManager &RGM) {
   LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
 
   if (SkipRegionalBranches) {
-    if (!skipRegions) {
-      skipRegions.reset(new DenseSet<Region*>());
-      auto DA  = &getAnalysis<LegacyDivergenceAnalysis>();    
-      auto PDT = &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
-      // find the top parent region
-      Region* P = R;
-      while (P->getParent() != nullptr) {
-        P = P->getParent();
-      }
-      this->skipRegionalBranches(P, DA, PDT);
-    }
-    if (!skipRegions->count(R))
-      return false;
-
-    LLVM_DEBUG(dbgs() << "*** structurizing: " << *R << "\n");
+    auto DA  = &getAnalysis<LegacyDivergenceAnalysis>();    
+    auto PDT = &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
+    if (this->skipRegionalBranches(R, DA, PDT))
+      return false;    
   }
+
+  LLVM_DEBUG(dbgs() << "*** structurizing: " << *R << "\n");
 
   Func = R->getEntry()->getParent();
   ParentRegion = R;
