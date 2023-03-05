@@ -332,8 +332,8 @@ void DivergencePropagator::exploreDataDependency(Value *V) {
         Worklist.push_back(U);
       }
       // Handle divergent stack stores
-      // If the value diverge, also mark the address as divergent,
-      // such that loads from that address will also be divergent
+      // If the stored value diverges, also mark its address as divergent,
+      // such that loads from that address will also be divergent.
       if (auto ST = dyn_cast<StoreInst>(U)) {        
         auto value = ST->getValueOperand();
         if (value == V) {
