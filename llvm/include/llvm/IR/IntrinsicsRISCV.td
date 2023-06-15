@@ -66,10 +66,10 @@ let TargetPrefix = "riscv" in {
   defm int_riscv_masked_cmpxchg : MaskedAtomicRMWFiveArgIntrinsics;
 
   // Vortex extension
-  def int_riscv_vx_tmask : Intrinsic<[llvm_i32_ty], [], [IntrNoMem, IntrWillReturn]>;
-  def int_riscv_vx_tmc   : Intrinsic<[], [llvm_i32_ty], []>;
-  def int_riscv_vx_pred  : Intrinsic<[], [llvm_i32_ty], []>;
-  def int_riscv_vx_split : Intrinsic<[], [llvm_i32_ty], []>;
+  def int_riscv_vx_tmask : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+  def int_riscv_vx_tmc   : Intrinsic<[], [llvm_anyint_ty], []>;
+  def int_riscv_vx_pred  : Intrinsic<[], [llvm_anyint_ty], []>;
+  def int_riscv_vx_split : Intrinsic<[], [llvm_anyint_ty], []>;
   def int_riscv_vx_join  : Intrinsic<[], [], []>;
 
 } // TargetPrefix = "riscv"

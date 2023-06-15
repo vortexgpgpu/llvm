@@ -282,6 +282,8 @@ private:
   LoopInfo *LI_;
   RegionInfo *RI_;
 
+  Type* SizeTTy_;
+
   Function *tmask_func_;
   Function *pred_func_;
   Function *tmc_func_;
@@ -508,10 +510,21 @@ void VortexBranchDivergence1::initialize(Function &F, const RISCVSubtarget &ST) 
   auto& M = *F.getParent();
   auto& Context = M.getContext();
 
-  tmask_func_ = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_tmask);
-  pred_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_pred);
-  tmc_func_   = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_tmc);
-  split_func_ = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_split);
+  auto sizeTSize = M.getDataLayout().getPointerSizeInBits();  
+  switch (sizeTSize) {
+  case 128: SizeTTy_ = llvm::Type::getInt128Ty(Context); break;
+  case 64:  SizeTTy_ = llvm::Type::getInt64Ty(Context); break;
+  case 32:  SizeTTy_ = llvm::Type::getInt32Ty(Context); break;
+  case 16:  SizeTTy_ = llvm::Type::getInt16Ty(Context); break;
+  case 8:   SizeTTy_ = llvm::Type::getInt8Ty(Context); break;
+  default:
+    LLVM_DEBUG(dbgs() << "Error: invalid pointer size: " << sizeTSize << "\n");
+  }
+
+  tmask_func_ = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_tmask, {SizeTTy_});
+  pred_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_pred, {SizeTTy_});
+  tmc_func_   = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_tmc, {SizeTTy_});
+  split_func_ = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_split, {SizeTTy_});
   join_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_join); 
 
   RI_ = &getAnalysis<RegionInfoPass>().getRegionInfo();
@@ -580,6 +593,11 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
         }
       }
     } else {      
+      auto ipdom = PDT_->findNearestCommonDominator(Br->getSuccessor(0), Br->getSuccessor(1));
+      if (ipdom == nullptr) {
+        llvm::errs() << "warning: divergent branch with no IPDOM: " << namePrinter_.BBName(BB) << " --- skipping.\n";
+        continue;
+      }
       if (div_blocks_set_.insert(BB).second) {
         // add new branch to the list
         LLVM_DEBUG(dbgs() << "*** divergent branch: " << namePrinter_.BBName(BB) << "\n");
@@ -659,7 +677,7 @@ void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* funct
           IRBuilder<> ir_builder(branch);
           auto cond = branch->getCondition();
           auto not_cond = ir_builder.CreateNot(cond, namePrinter_.ValueName(cond) + ".not");
-          auto not_cond_i32 = ir_builder.CreateIntCast(not_cond, ir_builder.getInt32Ty(), false, namePrinter_.ValueName(not_cond) + ".i32");
+          auto not_cond_i32 = ir_builder.CreateIntCast(not_cond, SizeTTy_, false, namePrinter_.ValueName(not_cond) + ".i32");
           LLVM_DEBUG(dbgs() << "*** insert thread predicate '" << namePrinter_.ValueName(not_cond_i32) << "' before exiting block: " << namePrinter_.BBName(exiting_block) << "\n");          
           CallInst::Create(pred_func_, not_cond_i32, "", branch);
 
@@ -669,7 +687,9 @@ void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* funct
           stub_blocks.insert(stub);
           auto stub_br = BranchInst::Create(succ, stub);          
           bool found = replaceSuccessor_.replaceSuccessor(exiting_block, succ, stub);
-          assert(found);
+          if (!found) {
+            std::abort();
+          }
           CallInst::Create(tmc_func_, tmask, "", stub_br);
         }
       }
@@ -687,8 +707,8 @@ void VortexBranchDivergence1::processBranches(LLVMContext* context, Function* fu
     assert(branch);
     auto ipdom = PDT_->findNearestCommonDominator(branch->getSuccessor(0), branch->getSuccessor(1));
     if (ipdom == nullptr) {
-      llvm_unreachable("divergent branch with no IPDOM!");
-      continue;
+      llvm::errs() << "error: divergent branch with no IPDOM: " << namePrinter_.BBName(block) << "\n";
+      std::abort();
     }
     ipdoms[block] = ipdom;
   }
@@ -697,17 +717,17 @@ void VortexBranchDivergence1::processBranches(LLVMContext* context, Function* fu
   for (auto BI = div_blocks_.rbegin(), BIE = div_blocks_.rend(); BI != BIE; ++BI) {
     auto block = *BI;
     auto ipdom = ipdoms[block];
-    assert(ipdom);
     auto branch = dyn_cast<BranchInst>(block->getTerminator());
     assert(branch);
-
     auto region = RI_->getRegionFor(block);
+#ifndef NDEBUG    
     LLVM_DEBUG(dbgs() << "*** process branch " << namePrinter_.BBName(block) << ", region=" << region->getNameStr() << "\n");
+#endif
 
     // insert split instruction before divergent branch      
     IRBuilder<> ir_builder(branch);
     auto cond = branch->getCondition();
-    auto cond_i32 = ir_builder.CreateIntCast(cond, ir_builder.getInt32Ty(), false, namePrinter_.ValueName(cond) + ".i32");
+    auto cond_i32 = ir_builder.CreateIntCast(cond, SizeTTy_, false, namePrinter_.ValueName(cond) + ".i32");
     LLVM_DEBUG(dbgs() << "*** insert split '" << namePrinter_.ValueName(cond_i32) << "' before " << namePrinter_.BBName(block) << "'s branch.\n");
     CallInst::Create(split_func_, cond_i32, "", branch);
 
@@ -720,7 +740,9 @@ void VortexBranchDivergence1::processBranches(LLVMContext* context, Function* fu
     FindSuccessor(block, ipdom, preds);
     for (auto pred : preds) {
       bool found = replaceSuccessor_.replaceSuccessor(pred, ipdom, stub);
-      assert(found);
+      if (!found) {
+        std::abort();
+      }
     }
   }
 }

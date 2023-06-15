@@ -85,10 +85,10 @@ def CSR_TMASK : SysReg<"tmask", 0xCC4>;
 
 def : Pat<(int_riscv_vx_tmask), (CSRRS CSR_TMASK.Encoding, X0)>;
 
-def : Pat<(int_riscv_vx_tmc i32:$rs1), (VX_TMC GPR:$rs1)>;
+def : Pat<(int_riscv_vx_tmc GPR:$rs1), (VX_TMC GPR:$rs1)>;
 
-def : Pat<(int_riscv_vx_pred i32:$rs1), (VX_PRED GPR:$rs1)>;
+def : Pat<(int_riscv_vx_pred GPR:$rs1), (VX_PRED GPR:$rs1)>;
 
-def : Pat<(int_riscv_vx_split i32:$rs1), (VX_SPLIT GPR:$rs1)>;
+def : Pat<(int_riscv_vx_split GPR:$rs1), (VX_SPLIT GPR:$rs1)>;
 
 def : Pat<(int_riscv_vx_join), (VX_JOIN)>;
