@@ -36,9 +36,9 @@
 using namespace llvm;
 
 static cl::opt<int> EnableVortexBranchDivergence(
-  "vortex-branch-divergence",
-  cl::desc("Enable Branch Divergence Instrumentation"),
-  cl::init(1));
+    "vortex-branch-divergence",
+    cl::desc("Enable Branch Divergence Instrumentation"),
+    cl::init(1));
 
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   RegisterTargetMachine<RISCVTargetMachine> X(getTheRISCV32Target());
@@ -62,30 +62,30 @@ static StringRef computeDataLayout(const Triple &TT) {
 }
 
 static Reloc::Model getEffectiveRelocModel(const Triple &TT,
-                                           Optional<Reloc::Model> RM) {
+    Optional<Reloc::Model> RM) {
   if (!RM.hasValue())
     return Reloc::Static;
   return *RM;
 }
 
 RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
-                                       StringRef CPU, StringRef FS,
-                                       const TargetOptions &Options,
-                                       Optional<Reloc::Model> RM,
-                                       Optional<CodeModel::Model> CM,
-                                       CodeGenOpt::Level OL, bool JIT)
-    : LLVMTargetMachine(T, computeDataLayout(TT), TT, CPU, FS, Options,
-                        getEffectiveRelocModel(TT, RM),
-                        getEffectiveCodeModel(CM, CodeModel::Small), OL),
-      TLOF(std::make_unique<RISCVELFTargetObjectFile>()) {
-  initAsmInfo();
+    StringRef CPU, StringRef FS,
+    const TargetOptions &Options,
+    Optional<Reloc::Model> RM,
+    Optional<CodeModel::Model> CM,
+    CodeGenOpt::Level OL, bool JIT)
+  : LLVMTargetMachine(T, computeDataLayout(TT), TT, CPU, FS, Options,
+      getEffectiveRelocModel(TT, RM),
+      getEffectiveCodeModel(CM, CodeModel::Small), OL),
+  TLOF(std::make_unique<RISCVELFTargetObjectFile>()) {
+    initAsmInfo();
 
-  // RISC-V supports the MachineOutliner.
-  setMachineOutliner(true);
+    // RISC-V supports the MachineOutliner.
+    setMachineOutliner(true);
 
-  // Detect Vortex extension
-  isVortex_ = FS.contains("vortex");
-}
+    // Detect Vortex extension
+    isVortex_ = FS.contains("vortex");
+  }
 
 const RISCVSubtarget *
 RISCVTargetMachine::getSubtargetImpl(const Function &F) const {
@@ -93,11 +93,11 @@ RISCVTargetMachine::getSubtargetImpl(const Function &F) const {
   Attribute FSAttr = F.getFnAttribute("target-features");
 
   std::string CPU = !CPUAttr.hasAttribute(Attribute::None)
-                        ? CPUAttr.getValueAsString().str()
-                        : TargetCPU;
+    ? CPUAttr.getValueAsString().str()
+    : TargetCPU;
   std::string FS = !FSAttr.hasAttribute(Attribute::None)
-                       ? FSAttr.getValueAsString().str()
-                       : TargetFS;
+    ? FSAttr.getValueAsString().str()
+    : TargetFS;
   std::string Key = CPU + FS;
   auto &I = SubtargetMap[Key];
   if (!I) {
@@ -107,7 +107,7 @@ RISCVTargetMachine::getSubtargetImpl(const Function &F) const {
     resetTargetOptions(F);
     auto ABIName = Options.MCOptions.getABIName();
     if (const MDString *ModuleTargetABI = dyn_cast_or_null<MDString>(
-            F.getParent()->getModuleFlag("target-abi"))) {
+          F.getParent()->getModuleFlag("target-abi"))) {
       auto TargetABI = RISCVABI::getTargetABI(ABIName);
       if (TargetABI != RISCVABI::ABI_Unknown &&
           ModuleTargetABI->getString() != ABIName) {
@@ -126,29 +126,29 @@ RISCVTargetMachine::getTargetTransformInfo(const Function &F) {
 }
 
 namespace {
-class RISCVPassConfig : public TargetPassConfig {
+  class RISCVPassConfig : public TargetPassConfig {
     bool isVortex_;
-public:
-  RISCVPassConfig(RISCVTargetMachine &TM, PassManagerBase &PM)
+    public:
+    RISCVPassConfig(RISCVTargetMachine &TM, PassManagerBase &PM)
       : TargetPassConfig(TM, PM)
-      , isVortex_(TM.isVortex()) 
-  {}
+        , isVortex_(TM.isVortex())
+    {}
 
-  RISCVTargetMachine &getRISCVTargetMachine() const {
-    return getTM<RISCVTargetMachine>();
-  }
+    RISCVTargetMachine &getRISCVTargetMachine() const {
+      return getTM<RISCVTargetMachine>();
+    }
 
-  void addIRPasses() override;
-  bool addInstSelector() override;
-  bool addIRTranslator() override;
-  bool addLegalizeMachineIR() override;
-  bool addRegBankSelect() override;
-  bool addGlobalInstructionSelect() override;
-  void addPreEmitPass() override;
-  void addPreEmitPass2() override;
-  void addPreRegAlloc() override;
-  bool addPreISel() override;
-};
+    void addIRPasses() override;
+    bool addInstSelector() override;
+    bool addIRTranslator() override;
+    bool addLegalizeMachineIR() override;
+    bool addRegBankSelect() override;
+    bool addGlobalInstructionSelect() override;
+    void addPreEmitPass() override;
+    void addPreEmitPass2() override;
+    void addPreRegAlloc() override;
+    bool addPreISel() override;
+  };
 }
 
 TargetPassConfig *RISCVTargetMachine::createPassConfig(PassManagerBase &PM) {
@@ -186,8 +186,8 @@ bool RISCVPassConfig::addGlobalInstructionSelect() {
   return false;
 }
 
-void RISCVPassConfig::addPreEmitPass() { 
-  addPass(&BranchRelaxationPassID); 
+void RISCVPassConfig::addPreEmitPass() {
+  addPass(&BranchRelaxationPassID);
 }
 
 void RISCVPassConfig::addPreEmitPass2() {
@@ -202,8 +202,8 @@ void RISCVPassConfig::addPreRegAlloc() {
 }
 
 bool RISCVPassConfig::addPreISel() {
-   if (getRISCVTargetMachine().isVortex() 
-    && EnableVortexBranchDivergence != 0) {
+  if (getRISCVTargetMachine().isVortex()
+      && EnableVortexBranchDivergence != 0) {
     addPass(createSinkingPass());
     addPass(createLoopSimplifyCFGPass());
     addPass(createLowerSwitchPass());
@@ -211,6 +211,8 @@ bool RISCVPassConfig::addPreISel() {
     addPass(createVortexBranchDivergence0Pass());
     addPass(createStructurizeCFGPass(true, (EnableVortexBranchDivergence > 1)));
     addPass(createVortexBranchDivergence1Pass(EnableVortexBranchDivergence));
+    // shin
+    addPass(createVortexIntrinsicFuncLoweringPass());
   }
   return false;
 }

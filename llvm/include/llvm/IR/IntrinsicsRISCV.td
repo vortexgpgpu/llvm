@@ -27,49 +27,63 @@ let TargetPrefix = "riscv" in {
 
   // T @llvm.<name>.T.<p>(any*, T, T, T imm);
   class MaskedAtomicRMWFourArg<LLVMType itype>
-      : Intrinsic<[itype], [llvm_anyptr_ty, itype, itype, itype],
-                  [IntrArgMemOnly, NoCapture<0>, ImmArg<3>]>;
-  // T @llvm.<name>.T.<p>(any*, T, T, T, T imm);
-  class MaskedAtomicRMWFiveArg<LLVMType itype>
+    : Intrinsic<[itype], [llvm_anyptr_ty, itype, itype, itype],
+    [IntrArgMemOnly, NoCapture<0>, ImmArg<3>]>;
+    // T @llvm.<name>.T.<p>(any*, T, T, T, T imm);
+    class MaskedAtomicRMWFiveArg<LLVMType itype>
       : Intrinsic<[itype], [llvm_anyptr_ty, itype, itype, itype, itype],
-                  [IntrArgMemOnly, NoCapture<0>, ImmArg<4>]>;
+      [IntrArgMemOnly, NoCapture<0>, ImmArg<4>]>;
 
-  // We define 32-bit and 64-bit variants of the above, where T stands for i32
-  // or i64 respectively:
-  multiclass MaskedAtomicRMWFourArgIntrinsics {
-    // i32 @llvm.<name>.i32.<p>(any*, i32, i32, i32 imm);
-    def _i32 : MaskedAtomicRMWFourArg<llvm_i32_ty>;
-    // i64 @llvm.<name>.i32.<p>(any*, i64, i64, i64 imm);
-    def _i64 : MaskedAtomicRMWFourArg<llvm_i64_ty>;
-  }
+      // We define 32-bit and 64-bit variants of the above, where T stands for i32
+      // or i64 respectively:
+      multiclass MaskedAtomicRMWFourArgIntrinsics {
+        // i32 @llvm.<name>.i32.<p>(any*, i32, i32, i32 imm);
+        def _i32 : MaskedAtomicRMWFourArg<llvm_i32_ty>;
+        // i64 @llvm.<name>.i32.<p>(any*, i64, i64, i64 imm);
+        def _i64 : MaskedAtomicRMWFourArg<llvm_i64_ty>;
+      }
 
-  multiclass MaskedAtomicRMWFiveArgIntrinsics {
-    // i32 @llvm.<name>.i32.<p>(any*, i32, i32, i32, i32 imm);
-    def _i32 : MaskedAtomicRMWFiveArg<llvm_i32_ty>;
-    // i64 @llvm.<name>.i64.<p>(any*, i64, i64, i64, i64 imm);
-    def _i64 : MaskedAtomicRMWFiveArg<llvm_i64_ty>;
-  }
+      multiclass MaskedAtomicRMWFiveArgIntrinsics {
+        // i32 @llvm.<name>.i32.<p>(any*, i32, i32, i32, i32 imm);
+        def _i32 : MaskedAtomicRMWFiveArg<llvm_i32_ty>;
+        // i64 @llvm.<name>.i64.<p>(any*, i64, i64, i64, i64 imm);
+        def _i64 : MaskedAtomicRMWFiveArg<llvm_i64_ty>;
+      }
 
-  // @llvm.riscv.masked.atomicrmw.*.{i32,i64}.<p>(...)
-  defm int_riscv_masked_atomicrmw_xchg : MaskedAtomicRMWFourArgIntrinsics;
-  defm int_riscv_masked_atomicrmw_add : MaskedAtomicRMWFourArgIntrinsics;
-  defm int_riscv_masked_atomicrmw_sub : MaskedAtomicRMWFourArgIntrinsics;
-  defm int_riscv_masked_atomicrmw_nand : MaskedAtomicRMWFourArgIntrinsics;
-  // Signed min and max need an extra operand to do sign extension with.
-  defm int_riscv_masked_atomicrmw_max : MaskedAtomicRMWFiveArgIntrinsics;
-  defm int_riscv_masked_atomicrmw_min : MaskedAtomicRMWFiveArgIntrinsics;
-  // Unsigned min and max don't need the extra operand.
-  defm int_riscv_masked_atomicrmw_umax : MaskedAtomicRMWFourArgIntrinsics;
-  defm int_riscv_masked_atomicrmw_umin : MaskedAtomicRMWFourArgIntrinsics;
+      // @llvm.riscv.masked.atomicrmw.*.{i32,i64}.<p>(...)
+      defm int_riscv_masked_atomicrmw_xchg : MaskedAtomicRMWFourArgIntrinsics;
+      defm int_riscv_masked_atomicrmw_add : MaskedAtomicRMWFourArgIntrinsics;
+      defm int_riscv_masked_atomicrmw_sub : MaskedAtomicRMWFourArgIntrinsics;
+      defm int_riscv_masked_atomicrmw_nand : MaskedAtomicRMWFourArgIntrinsics;
+      // Signed min and max need an extra operand to do sign extension with.
+      defm int_riscv_masked_atomicrmw_max : MaskedAtomicRMWFiveArgIntrinsics;
+      defm int_riscv_masked_atomicrmw_min : MaskedAtomicRMWFiveArgIntrinsics;
+      // Unsigned min and max don't need the extra operand.
+      defm int_riscv_masked_atomicrmw_umax : MaskedAtomicRMWFourArgIntrinsics;
+      defm int_riscv_masked_atomicrmw_umin : MaskedAtomicRMWFourArgIntrinsics;
 
-  // @llvm.riscv.masked.cmpxchg.{i32,i64}.<p>(...)
-  defm int_riscv_masked_cmpxchg : MaskedAtomicRMWFiveArgIntrinsics;
+      // @llvm.riscv.masked.cmpxchg.{i32,i64}.<p>(...)
+      defm int_riscv_masked_cmpxchg : MaskedAtomicRMWFiveArgIntrinsics;
 
-  // Vortex extension
-  def int_riscv_vx_tmask : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
-  def int_riscv_vx_tmc   : Intrinsic<[], [llvm_anyint_ty], []>;
-  def int_riscv_vx_pred  : Intrinsic<[], [llvm_anyint_ty], []>;
-  def int_riscv_vx_split : Intrinsic<[], [llvm_anyint_ty], []>;
-  def int_riscv_vx_join  : Intrinsic<[], [], []>;
+      // Vortex extension
+      def int_riscv_vx_tmask : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+      def int_riscv_vx_tmc   : Intrinsic<[], [llvm_anyint_ty], []>;
+      def int_riscv_vx_pred  : Intrinsic<[], [llvm_anyint_ty], []>;
+      def int_riscv_vx_split : Intrinsic<[], [llvm_anyint_ty], []>;
+      def int_riscv_vx_join  : Intrinsic<[], [], []>;
+
+      // shin
+      def int_riscv_vx_bar  : Intrinsic<[], [llvm_anyint_ty, llvm_anyint_ty], []>;
+
+      def int_riscv_vx_tid : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+      def int_riscv_vx_wid : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+      def int_riscv_vx_cid : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+      def int_riscv_vx_gid : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+
+      def int_riscv_vx_nt : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+      def int_riscv_vx_nw : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+      def int_riscv_vx_nc : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+      def int_riscv_vx_ng : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+
 
 } // TargetPrefix = "riscv"

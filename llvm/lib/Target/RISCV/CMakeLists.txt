@@ -35,6 +35,7 @@ add_llvm_target(RISCVCodeGen
   RISCVTargetObjectFile.cpp
   RISCVTargetTransformInfo.cpp
   VortexBranchDivergence.cpp
+  VortexIntrinsicFunc.cpp
   )
 
 add_subdirectory(AsmParser)

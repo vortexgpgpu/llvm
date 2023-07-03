@@ -6,7 +6,7 @@ def RISCV_CUSTOM2 : RISCVOpcode<0b1011011>;   // 0x5B
 def RISCV_CUSTOM3 : RISCVOpcode<0b1111011>;   // 0x7B
 
 class VXInstR4<RISCVOpcode opcode, dag outs, dag ins, string opcodestr, string argstr>
-    : RVInst<outs, ins, opcodestr, argstr, [], InstFormatR4> {
+: RVInst<outs, ins, opcodestr, argstr, [], InstFormatR4> {
   bits<5> rs3;
   bits<2> funct2;
   bits<5> rs2;
@@ -25,59 +25,59 @@ class VXInstR4<RISCVOpcode opcode, dag outs, dag ins, string opcodestr, string a
 
 let hasSideEffects = 1, mayStore = 1 , mayLoad = 1 in {
 
-def VX_TMC : RVInstR<0, 0, RISCV_CUSTOM0, (outs), (ins GPR:$rs1), "vx_tmc", "$rs1">, Sched<[]> {
+  def VX_TMC : RVInstR<0, 0, RISCV_CUSTOM0, (outs), (ins GPR:$rs1), "vx_tmc", "$rs1">, Sched<[]> {
     let rd  = 0;
     let rs2 = 0;
-}
+  }
 
-def VX_PRED : RVInstR<0, 0, RISCV_CUSTOM0, (outs), (ins GPR:$rs1), "vx_pred", "$rs1">, Sched<[]> {
+  def VX_PRED : RVInstR<0, 0, RISCV_CUSTOM0, (outs), (ins GPR:$rs1), "vx_pred", "$rs1">, Sched<[]> {
     let rd  = 0;
     let rs2 = 1;
-}
+  }
 
-def VX_WSPAWN : RVInstR<0, 1, RISCV_CUSTOM0, (outs), (ins GPR:$rs1, GPR:$rs2), "vx_wspawn", "$rs1, $rs2">, Sched<[]> {
+  def VX_WSPAWN : RVInstR<0, 1, RISCV_CUSTOM0, (outs), (ins GPR:$rs1, GPR:$rs2), "vx_wspawn", "$rs1, $rs2">, Sched<[]> {
     let rd = 0;
-}
+  }
 
-def VX_SPLIT : RVInstR<0, 2, RISCV_CUSTOM0, (outs), (ins GPR:$rs1), "vx_split", "$rs1">, Sched<[]> {
+  def VX_SPLIT : RVInstR<0, 2, RISCV_CUSTOM0, (outs), (ins GPR:$rs1), "vx_split", "$rs1">, Sched<[]> {
     let rd  = 0;
     let rs2 = 0;
-}
+  }
 
-def VX_JOIN : RVInstR<0, 3, RISCV_CUSTOM0, (outs), (ins), "vx_join", "">, Sched<[]> {
+  def VX_JOIN : RVInstR<0, 3, RISCV_CUSTOM0, (outs), (ins), "vx_join", "">, Sched<[]> {
     let rd  = 0;
     let rs1 = 0;
-    let rs2 = 0;    
-}
+    let rs2 = 0;
+  }
 
-def VX_BAR : RVInstR<0, 4, RISCV_CUSTOM0, (outs), (ins GPR:$rs1, GPR:$rs2), "vx_bar", "$rs1, $rs2">, Sched<[]> {
+  def VX_BAR : RVInstR<0, 4, RISCV_CUSTOM0, (outs), (ins GPR:$rs1, GPR:$rs2), "vx_bar", "$rs1, $rs2">, Sched<[]> {
     let rd = 0;
-}
+  }
 
-def VX_TEX : VXInstR4<RISCV_CUSTOM1, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2, GPR:$rs3), "vx_tex", "$rd, $rs1, $rs2, $rs3">, Sched<[]> {
+  def VX_TEX : VXInstR4<RISCV_CUSTOM1, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2, GPR:$rs3), "vx_tex", "$rd, $rs1, $rs2, $rs3">, Sched<[]> {
     let funct2 = 0;
     let funct3 = 0;
-}
+  }
 
-def VX_CMOV : VXInstR4<RISCV_CUSTOM1, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2, GPR:$rs3), "vx_cmov", "$rd, $rs1, $rs2, $rs3">, Sched<[]> {
+  def VX_CMOV : VXInstR4<RISCV_CUSTOM1, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2, GPR:$rs3), "vx_cmov", "$rd, $rs1, $rs2, $rs3">, Sched<[]> {
     let funct2 = 1;
     let funct3 = 0;
-}
+  }
 
-def VX_ROP : VXInstR4<RISCV_CUSTOM1, (outs), (ins GPR:$rs1, GPR:$rs2, GPR:$rs3), "vx_rop", "$rs1, $rs2, $rs3">, Sched<[]> {    
+  def VX_ROP : VXInstR4<RISCV_CUSTOM1, (outs), (ins GPR:$rs1, GPR:$rs2, GPR:$rs3), "vx_rop", "$rs1, $rs2, $rs3">, Sched<[]> {
     let funct2 = 2;
     let funct3 = 0;
     let rd     = 0;
-}
+  }
 
-def VX_IMADD : VXInstR4<RISCV_CUSTOM1, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2, GPR:$rs3, uimm2:$funct2), "vx_imadd", "$rd, $rs1, $rs2, $rs3, $funct2">, Sched<[]> {
+  def VX_IMADD : VXInstR4<RISCV_CUSTOM1, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2, GPR:$rs3, uimm2:$funct2), "vx_imadd", "$rd, $rs1, $rs2, $rs3, $funct2">, Sched<[]> {
     let funct3 = 1;
-}
+  }
 
-def VX_RAST : RVInstR<1, 0, RISCV_CUSTOM0, (outs GPR:$rd), (ins), "vx_rast", "">, Sched<[]> {
+  def VX_RAST : RVInstR<1, 0, RISCV_CUSTOM0, (outs GPR:$rd), (ins), "vx_rast", "">, Sched<[]> {
     let rs1 = 0;
     let rs2 = 0;
-}
+  }
 
 }
 
@@ -92,3 +92,27 @@ def : Pat<(int_riscv_vx_pred GPR:$rs1), (VX_PRED GPR:$rs1)>;
 def : Pat<(int_riscv_vx_split GPR:$rs1), (VX_SPLIT GPR:$rs1)>;
 
 def : Pat<(int_riscv_vx_join), (VX_JOIN)>;
+
+// shin
+def CSR_NT : SysReg<"nt", 0xFC0>;
+def CSR_NW : SysReg<"nw", 0xFC1>;
+def CSR_NC : SysReg<"nw", 0xFC2>;
+def CSR_NG : SysReg<"nw", 0xFC3>;
+def CSR_TID : SysReg<"tid", 0xCC0>;
+def CSR_WID : SysReg<"wid", 0xCC1>;
+def CSR_CID : SysReg<"cid", 0xCC2>;
+def CSR_GID : SysReg<"gid", 0xCC3>;
+
+def : Pat<(int_riscv_vx_tid), (CSRRS CSR_TID.Encoding, X0)>;
+def : Pat<(int_riscv_vx_wid), (CSRRS CSR_WID.Encoding, X0)>;
+def : Pat<(int_riscv_vx_cid), (CSRRS CSR_CID.Encoding, X0)>;
+def : Pat<(int_riscv_vx_gid), (CSRRS CSR_GID.Encoding, X0)>;
+
+def : Pat<(int_riscv_vx_nt), (CSRRS CSR_NT.Encoding, X0)>;
+def : Pat<(int_riscv_vx_nw), (CSRRS CSR_NW.Encoding, X0)>;
+def : Pat<(int_riscv_vx_nc), (CSRRS CSR_NC.Encoding, X0)>;
+def : Pat<(int_riscv_vx_ng), (CSRRS CSR_NG.Encoding, X0)>;
+
+def : Pat<(int_riscv_vx_bar GPR:$rs1, GPR:$rs2), (VX_BAR GPR:$rs1, GPR:$rs2)>;
+
+

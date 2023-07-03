@@ -18,40 +18,43 @@
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
-class RISCVRegisterBankInfo;
-class RISCVSubtarget;
-class RISCVTargetMachine;
-class AsmPrinter;
-class FunctionPass;
-class InstructionSelector;
-class MCInst;
-class MCOperand;
-class MachineInstr;
-class MachineOperand;
-class PassRegistry;
+  class RISCVRegisterBankInfo;
+  class RISCVSubtarget;
+  class RISCVTargetMachine;
+  class AsmPrinter;
+  class FunctionPass;
+  class InstructionSelector;
+  class MCInst;
+  class MCOperand;
+  class MachineInstr;
+  class MachineOperand;
+  class PassRegistry;
 
-void LowerRISCVMachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
-                                    const AsmPrinter &AP);
-bool LowerRISCVMachineOperandToMCOperand(const MachineOperand &MO,
-                                         MCOperand &MCOp, const AsmPrinter &AP);
+  void LowerRISCVMachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
+      const AsmPrinter &AP);
+  bool LowerRISCVMachineOperandToMCOperand(const MachineOperand &MO,
+      MCOperand &MCOp, const AsmPrinter &AP);
 
-FunctionPass *createRISCVISelDag(RISCVTargetMachine &TM);
+  FunctionPass *createRISCVISelDag(RISCVTargetMachine &TM);
 
-FunctionPass *createRISCVMergeBaseOffsetOptPass();
-void initializeRISCVMergeBaseOffsetOptPass(PassRegistry &);
+  FunctionPass *createRISCVMergeBaseOffsetOptPass();
+  void initializeRISCVMergeBaseOffsetOptPass(PassRegistry &);
 
-FunctionPass *createRISCVExpandPseudoPass();
-void initializeRISCVExpandPseudoPass(PassRegistry &);
+  FunctionPass *createRISCVExpandPseudoPass();
+  void initializeRISCVExpandPseudoPass(PassRegistry &);
 
-FunctionPass *createVortexBranchDivergence0Pass();
-void initializeVortexBranchDivergence0Pass(PassRegistry&);
+  FunctionPass *createVortexBranchDivergence0Pass();
+  void initializeVortexBranchDivergence0Pass(PassRegistry&);
 
-FunctionPass *createVortexBranchDivergence1Pass(int divergenceMode = 0);
-void initializeVortexBranchDivergence1Pass(PassRegistry&);
+  FunctionPass *createVortexBranchDivergence1Pass(int divergenceMode = 0);
+  void initializeVortexBranchDivergence1Pass(PassRegistry&);
 
-InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
-                                                    RISCVSubtarget &,
-                                                    RISCVRegisterBankInfo &);
+  InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
+      RISCVSubtarget &,
+      RISCVRegisterBankInfo &);
+
+  ModulePass *createVortexIntrinsicFuncLoweringPass();
+  void initializeVortexIntrinsicFuncLoweringPass(PassRegistry &);
 
 }
 
