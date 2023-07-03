@@ -35,6 +35,8 @@
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Utils.h"
 #include <optional>
 using namespace llvm;
 
@@ -42,6 +44,11 @@ static cl::opt<bool> EnableRedundantCopyElimination(
     "riscv-enable-copyelim",
     cl::desc("Enable the redundant copy elimination pass"), cl::init(true),
     cl::Hidden);
+
+static cl::opt<int> EnableVortexBranchDivergence(
+  "vortex-branch-divergence",
+  cl::desc("Enable Branch Divergence Instrumentation"),
+  cl::init(1));
 
 // FIXME: Unify control over GlobalMerge.
 static cl::opt<cl::boolOrDefault>
@@ -82,6 +89,10 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   initializeRISCVExpandPseudoPass(*PR);
   initializeRISCVInsertVSETVLIPass(*PR);
   initializeRISCVDAGToDAGISelPass(*PR);
+  if (EnableVortexBranchDivergence != 0) {
+    initializeVortexBranchDivergence0Pass(*PR);
+    initializeVortexBranchDivergence1Pass(*PR);
+  }
 }
 
 static StringRef computeDataLayout(const Triple &TT) {
@@ -111,6 +122,8 @@ RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
   // RISC-V supports the MachineOutliner.
   setMachineOutliner(true);
   setSupportsDefaultOutlining(true);
+  // Detect Vortex extension
+  isVortex_ = FS.contains("vortex");
 }
 
 const RISCVSubtarget *
@@ -294,6 +307,16 @@ bool RISCVPassConfig::addPreISel() {
                                   /* MergeExternalByDefault */ true));
   }
 
+  if (getRISCVTargetMachine().isVortex() 
+   && EnableVortexBranchDivergence != 0) {
+    addPass(createSinkingPass());
+    addPass(createLoopSimplifyCFGPass());
+    addPass(createLowerSwitchPass());
+    addPass(createFlattenCFGPass());
+    addPass(createVortexBranchDivergence0Pass());
+    addPass(createStructurizeCFGPass(true, (EnableVortexBranchDivergence > 1)));
+    addPass(createVortexBranchDivergence1Pass(EnableVortexBranchDivergence));
+  }
   return false;
 }
 

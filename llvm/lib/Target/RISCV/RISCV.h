@@ -71,6 +71,12 @@ void initializeRISCVInsertVSETVLIPass(PassRegistry &);
 FunctionPass *createRISCVRedundantCopyEliminationPass();
 void initializeRISCVRedundantCopyEliminationPass(PassRegistry &);
 
+FunctionPass *createVortexBranchDivergence0Pass();
+void initializeVortexBranchDivergence0Pass(PassRegistry&);
+
+FunctionPass *createVortexBranchDivergence1Pass(int divergenceMode = 0);
+void initializeVortexBranchDivergence1Pass(PassRegistry&);
+
 InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
                                                     RISCVSubtarget &,
                                                     RISCVRegisterBankInfo &);

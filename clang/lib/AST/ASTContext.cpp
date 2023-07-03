@@ -11699,6 +11699,8 @@ bool ASTContext::DeclMustBeEmitted(const Decl *D) {
     if (VD->getDescribedVarTemplate() ||
         isa<VarTemplatePartialSpecializationDecl>(VD))
       return false;
+    if (VD->hasAttr<VortexUniformAttr>())
+      return false;
   } else if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
     // We never need to emit an uninstantiated function template.
     if (FD->getTemplatedKind() == FunctionDecl::TK_FunctionTemplate)

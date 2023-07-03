@@ -1484,3 +1484,11 @@ bool RISCVTTIImpl::isLSRCostLess(const TargetTransformInfo::LSRCost &C1,
                   C2.NumIVMuls, C2.NumBaseAdds,
                   C2.ScaleCost, C2.ImmCost, C2.SetupCost);
 }
+
+bool RISCVTTIImpl::hasBranchDivergence() {
+  return hasBranchDivergence_;
+}
+
+bool RISCVTTIImpl::isSourceOfDivergence(const Value *V) {
+  return divergence_tracker_.eval(V);
+}

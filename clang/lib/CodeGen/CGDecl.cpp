@@ -1631,6 +1631,14 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
 
   if (D.hasAttr<AnnotateAttr>() && HaveInsertPoint())
     EmitVarAnnotations(&D, address.getPointer());
+  
+  if (D.hasAttr<VortexUniformAttr>() && HaveInsertPoint()) {    
+    if (auto I = dyn_cast<llvm::Instruction>(address.getPointer())) {
+      auto &Context = I->getContext();
+      auto MD = llvm::MDNode::get(Context, llvm::MDString::get(Context, "Uniform Variable"));
+      I->setMetadata("vortex.uniform", MD);
+    }    
+  }
 
   // Make sure we call @llvm.lifetime.end.
   if (emission.useLifetimeMarkers())
@@ -2611,6 +2619,14 @@ void CodeGenFunction::EmitParmDecl(const VarDecl &D, ParamValue Arg,
 
   if (D.hasAttr<AnnotateAttr>())
     EmitVarAnnotations(&D, DeclPtr.getPointer());
+
+  if (D.hasAttr<VortexUniformAttr>()) {    
+    if (auto I = dyn_cast<llvm::Instruction>(DeclPtr.getPointer())) {
+      auto &Context = I->getContext();
+      auto MD = llvm::MDNode::get(Context, llvm::MDString::get(Context, "Uniform Variable"));
+      I->setMetadata("vortex.uniform", MD);
+    }    
+  }
 
   // We can only check return value nullability if all arguments to the
   // function satisfy their nullability preconditions. This makes it necessary

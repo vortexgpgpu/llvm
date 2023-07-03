@@ -444,6 +444,13 @@ def HasStdExtZawrs : Predicate<"Subtarget->hasStdExtZawrs()">,
                                AssemblerPredicate<(all_of FeatureStdExtZawrs),
                                "'Zawrs' (Wait on Reservation Set)">;
 
+def FeatureVortex
+    : SubtargetFeature<"vortex", "HasExtVortex", "true", 
+                       "'Vortex' (Vortex ISA Extension)">;
+def HasExtVortex : Predicate<"Subtarget->HasExtVortex()">, 
+                             AssemblerPredicate<(all_of FeatureVortex), 
+                             "'Vortex' (Vortex ISA Extension)">;
+
 //===----------------------------------------------------------------------===//
 // Vendor extensions
 //===----------------------------------------------------------------------===//

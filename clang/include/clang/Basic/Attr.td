@@ -4127,3 +4127,11 @@ def ReadOnlyPlacement : InheritableAttr {
   let Subjects = SubjectList<[Record]>;
   let Documentation = [ReadOnlyPlacementDocs];
 }
+
+// Vortex attributes for marking variables as uniform
+def VortexUniform : InheritableAttr {
+  let Spellings = [GNU<"uniform">, Declspec<"__uniform__">];
+  let Subjects = SubjectList<[Var]>;
+  let LangOpts = [CPlusPlus];
+  let Documentation = [Undocumented];
+}

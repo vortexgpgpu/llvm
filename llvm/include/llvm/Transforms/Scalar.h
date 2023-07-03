@@ -270,7 +270,10 @@ FunctionPass *createFlattenCFGPass();
 ///
 /// When \p SkipUniformRegions is true the structizer will not structurize
 /// regions that only contain uniform branches.
-Pass *createStructurizeCFGPass(bool SkipUniformRegions = false);
+/// When \p SkipRegionalBranches is true the structizer will not structurize
+// regions that contain a divergent branch that is a region itself.
+Pass *createStructurizeCFGPass(bool SkipUniformRegions = false,
+                               bool SkipRegionalBranches = false);
 
 //===----------------------------------------------------------------------===//
 //

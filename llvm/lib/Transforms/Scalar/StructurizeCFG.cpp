@@ -19,6 +19,7 @@
 #include "llvm/Analysis/RegionInfo.h"
 #include "llvm/Analysis/RegionIterator.h"
 #include "llvm/Analysis/RegionPass.h"
+#include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
@@ -52,6 +53,10 @@ using namespace llvm;
 using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "structurizecfg"
+
+#ifndef NDEBUG
+#define LLVM_DEBUG(x) do {x;} while (false)
+#endif
 
 // The name for newly created blocks.
 const char FlowBlockName[] = "Flow";
@@ -320,16 +325,23 @@ public:
   void init(Region *R);
   bool run(Region *R, DominatorTree *DT);
   bool makeUniformRegion(Region *R, LegacyDivergenceAnalysis *DA);
+  bool skipRegionalBranches(Region *R, 
+                            LegacyDivergenceAnalysis *DA,
+                            PostDominatorTree* PDT);
 };
 
 class StructurizeCFGLegacyPass : public RegionPass {
   bool SkipUniformRegions;
+  bool SkipRegionalBranches;
 
 public:
   static char ID;
 
-  explicit StructurizeCFGLegacyPass(bool SkipUniformRegions_ = false)
-      : RegionPass(ID), SkipUniformRegions(SkipUniformRegions_) {
+  explicit StructurizeCFGLegacyPass(bool SkipUniformRegions_ = false,
+                                    bool SkipRegionalBranches_ = false)
+      : RegionPass(ID)
+      , SkipUniformRegions(SkipUniformRegions_)
+      , SkipRegionalBranches(SkipRegionalBranches_) {
     if (ForceSkipUniformRegions.getNumOccurrences())
       SkipUniformRegions = ForceSkipUniformRegions.getValue();
     initializeStructurizeCFGLegacyPassPass(*PassRegistry::getPassRegistry());
@@ -343,6 +355,12 @@ public:
       if (SCFG.makeUniformRegion(R, DA))
         return false;
     }
+    if (SkipRegionalBranches) {
+      auto DA  = &getAnalysis<LegacyDivergenceAnalysis>();    
+      auto PDT = &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
+      if (SCFG.skipRegionalBranches(R, DA, PDT))
+        return false;
+    }
     DominatorTree *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
     return SCFG.run(R, DT);
   }
@@ -350,8 +368,11 @@ public:
   StringRef getPassName() const override { return "Structurize control flow"; }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    if (SkipUniformRegions)
+    if (SkipUniformRegions || SkipRegionalBranches)
       AU.addRequired<LegacyDivergenceAnalysis>();
+    if (SkipRegionalBranches) {
+      AU.addRequired<PostDominatorTreeWrapperPass>();
+    }
     AU.addRequiredID(LowerSwitchID);
     AU.addRequired<DominatorTreeWrapperPass>();
 
@@ -1166,6 +1187,35 @@ bool StructurizeCFG::makeUniformRegion(Region *R,
   return false;
 }
 
+bool StructurizeCFG::skipRegionalBranches(Region *R, 
+                                          LegacyDivergenceAnalysis *DA,
+                                          PostDominatorTree* PDT) {
+  for (auto E : R->elements()) {   
+    if (E->isSubRegion())
+      continue;
+
+    auto BB = E->getEntry();
+    auto Br = dyn_cast<BranchInst>(BB->getTerminator());
+    if (Br == nullptr)
+      continue;
+    if (!Br->isConditional())
+      continue;
+    if (DA->isUniform(Br))
+      continue;
+
+    if (BB == R->getEntry()) {
+      LLVM_DEBUG(dbgs() << "*** structurize: skip divergent complete region " << *R << "\n");
+      continue;
+    }
+
+    // this basic block is divergent and non-regional
+    LLVM_DEBUG(dbgs() << "*** structurize: divergent non-regional block: " << *R << "\n");
+    return true;
+  }
+
+  return false;
+}
+
 /// Run the transformation for each region found
 bool StructurizeCFG::run(Region *R, DominatorTree *DT) {
   if (R->isTopLevelRegion())
@@ -1202,8 +1252,9 @@ bool StructurizeCFG::run(Region *R, DominatorTree *DT) {
   return true;
 }
 
-Pass *llvm::createStructurizeCFGPass(bool SkipUniformRegions) {
-  return new StructurizeCFGLegacyPass(SkipUniformRegions);
+Pass *llvm::createStructurizeCFGPass(bool SkipUniformRegions, 
+                                     bool SkipRegionalBranches) {
+  return new StructurizeCFGLegacyPass(SkipUniformRegions, SkipRegionalBranches);
 }
 
 static void addRegionIntoQueue(Region &R, std::vector<Region *> &Regions) {

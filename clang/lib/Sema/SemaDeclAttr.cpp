@@ -4927,6 +4927,10 @@ static void handleConstantAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   D->addAttr(::new (S.Context) CUDAConstantAttr(S.Context, AL));
 }
 
+static void handleVortexUniformAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+  handleSimpleAttribute<VortexUniformAttr>(S, D, AL);
+}
+
 static void handleSharedAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   const auto *VD = cast<VarDecl>(D);
   // extern __shared__ is only allowed on arrays with no length (e.g.
@@ -8782,6 +8786,9 @@ ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D, const ParsedAttr &AL,
     break;
   case ParsedAttr::AT_CUDAConstant:
     handleConstantAttr(S, D, AL);
+    break;
+  case ParsedAttr::AT_VortexUniform:
+    handleVortexUniformAttr(S, D, AL);
     break;
   case ParsedAttr::AT_PassObjectSize:
     handlePassObjectSizeAttr(S, D, AL);

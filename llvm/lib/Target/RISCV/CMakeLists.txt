@@ -46,7 +46,7 @@ add_llvm_target(RISCVCodeGen
   GISel/RISCVInstructionSelector.cpp
   GISel/RISCVLegalizerInfo.cpp
   GISel/RISCVRegisterBankInfo.cpp
-
+  VortexBranchDivergence.cpp  
   LINK_COMPONENTS
   Analysis
   AsmPrinter
@@ -62,6 +62,7 @@ add_llvm_target(RISCVCodeGen
   TargetParser
   TransformUtils
   GlobalISel
+  Scalar
 
   ADD_TO_COMPONENT
   RISCV
