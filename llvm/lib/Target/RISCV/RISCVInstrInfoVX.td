@@ -28,13 +28,6 @@ let hasSideEffects = 1, mayStore = 0 , mayLoad = 0 in {
 def VX_TMC : RVInstR<0, 0, RISCV_CUSTOM0, (outs), (ins GPR:$rs1), "vx_tmc", "$rs1">, Sched<[]> {
     let rd  = 0;
     let rs2 = 0;
-    let isBarrier = 1;
-}
-
-def VX_PRED : RVInstR<0, 0, RISCV_CUSTOM0, (outs), (ins GPR:$rs1), "vx_pred", "$rs1">, Sched<[]> {
-    let rd  = 0;
-    let rs2 = 1;
-    let isBarrier = 1;
 }
 
 def VX_WSPAWN : RVInstR<0, 1, RISCV_CUSTOM0, (outs), (ins GPR:$rs1, GPR:$rs2), "vx_wspawn", "$rs1, $rs2">, Sched<[]> {
@@ -43,18 +36,19 @@ def VX_WSPAWN : RVInstR<0, 1, RISCV_CUSTOM0, (outs), (ins GPR:$rs1, GPR:$rs2), "
 
 def VX_SPLIT : RVInstR<0, 2, RISCV_CUSTOM0, (outs GPR:$rd), (ins GPR:$rs1), "vx_split", "$rd, $rs1">, Sched<[]> {
     let rs2 = 0;
-    let isBarrier = 1;
-}
 
 def VX_JOIN : RVInstR<0, 3, RISCV_CUSTOM0, (outs), (ins GPR:$rs1), "vx_join", "$rs1">, Sched<[]> {
     let rd  = 0;
     let rs2 = 0;
-    let isBarrier = 1;
 }
 
 def VX_BAR : RVInstR<0, 4, RISCV_CUSTOM0, (outs), (ins GPR:$rs1, GPR:$rs2), "vx_bar", "$rs1, $rs2">, Sched<[]> {
     let rd = 0;
     let isBarrier = 1;
+}
+
+def VX_PRED : RVInstR<0, 5, RISCV_CUSTOM0, (outs), (ins GPR:$rs1, GPR:$rs2), "vx_pred", "$rs1, $rs2">, Sched<[]> {
+    let rd  = 0;
 }
 
 def VX_TEX : VXInstR4<RISCV_CUSTOM1, (outs GPR:$rd), (ins uimm2:$funct2, GPR:$rs1, GPR:$rs2, GPR:$rs3), "vx_tex", "$rd, $funct2, $rs1, $rs2, $rs3">, Sched<[]> {
@@ -85,7 +79,7 @@ def : Pat<(int_riscv_vx_tmask), (CSRRS CSR_TMASK.Encoding, X0)>;
 
 def : Pat<(int_riscv_vx_tmc GPR:$rs1), (VX_TMC GPR:$rs1)>;
 
-def : Pat<(int_riscv_vx_pred GPR:$rs1), (VX_PRED GPR:$rs1)>;
+def : Pat<(int_riscv_vx_pred GPR:$rs1, GPR:$rs2), (VX_PRED GPR:$rs1, GPR:$rs2)>;
 
 def : Pat<(int_riscv_vx_split GPR:$rs1), (VX_SPLIT GPR:$rs1)>;
 

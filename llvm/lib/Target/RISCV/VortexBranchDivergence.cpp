@@ -644,7 +644,7 @@ void VortexBranchDivergence1::initialize(Function &F, const RISCVSubtarget &ST) 
   }
 
   tmask_func_ = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_tmask, {SizeTTy_});
-  pred_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_pred, {SizeTTy_});
+  pred_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_pred, {SizeTTy_, SizeTTy_});
   tmc_func_   = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_tmc, {SizeTTy_});
   split_func_ = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_split, {SizeTTy_, SizeTTy_});
   join_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_join, {SizeTTy_}); 
@@ -819,9 +819,9 @@ void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* funct
           auto not_cond = ir_builder.CreateNot(cond, namePrinter_.ValueName(cond) + ".not");
           auto not_cond_i32 = ir_builder.CreateIntCast(not_cond, SizeTTy_, false, namePrinter_.ValueName(not_cond) + ".i32");
           LLVM_DEBUG(dbgs() << "*** insert thread predicate '" << namePrinter_.ValueName(not_cond_i32) << "' before exiting block: " << namePrinter_.BBName(exiting_block) << "\n");          
-          CallInst::Create(pred_func_, not_cond_i32, "", branch);
+          CallInst::Create(pred_func_, {not_cond_i32, tmask}, "", branch);
           
-          // restore thread mask before corresponding exit blocks          
+          /*// restore thread mask before corresponding exit blocks          
           auto stub = BasicBlock::Create(*context, "loop_exit_stub", function, succ);
           LLVM_DEBUG(dbgs() << "*** restore thread mask in stub '" << stub->getName() << "' before exit block: " << namePrinter_.BBName(succ) << "\n");
           stub_blocks.insert(stub);
@@ -830,7 +830,7 @@ void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* funct
           if (!found) {
             std::abort();
           }
-          CallInst::Create(tmc_func_, tmask, "", stub_br);
+          CallInst::Create(tmc_func_, tmask, "", stub_br);*/
         }
       }
     }
@@ -863,7 +863,6 @@ void VortexBranchDivergence1::processBranches(LLVMContext* context, Function* fu
     auto region = RI_->getRegionFor(block);
     LLVM_DEBUG(dbgs() << "*** process branch " << namePrinter_.BBName(block) << ", region=" << region->getNameStr() << "\n");
 #endif
-
     // insert split instruction before divergent branch      
     IRBuilder<> ir_builder(branch);
     auto cond = branch->getCondition();
@@ -1076,10 +1075,10 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
 #ifdef USE_MI
 
   for (auto &MBB : MF) {      
-    //MachineInstr *predInstr = nullptr;
-    //int distance = 0;
+    MachineInstr *predInstr = nullptr;
+    int distance = 0;
     for (auto &MI : MBB) {
-      /*if (MI.getOpcode() == RISCV::VX_PRED) {
+      if (MI.getOpcode() == RISCV::VX_PRED) {
         if (predInstr) {          
           LLVM_DEBUG(dbgs() << "*** duplicate VX_PRED! distance=" << distance << "\n");
           predInstr->removeFromParent();
@@ -1097,9 +1096,9 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
         }
         predInstr = nullptr;
       }
-      ++distance;*/
-
-      if (!MI.isBranch())
+      ++distance;
+      
+      /*if (!MI.isBranch())
         continue;
       if (!MI.isConditionalBranch())
         continue;
@@ -1112,9 +1111,7 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
       auto Term = BB->getTerminator();
       if (Term->getMetadata("Predicate") == nullptr)
         continue;
-
       LLVM_DEBUG(dbgs() << "*** found Predicate! in " << PassName_ << "\n");
-
       auto &DL = MI.getDebugLoc();
       auto NotCondReg = MF.getRegInfo().createVirtualRegister(&RISCV::GPRRegClass);
       auto CondReg = Cond.getReg();
@@ -1122,17 +1119,17 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
         .addReg(CondReg)
         .addImm(1);
       BuildMI(MBB, MI, DL, TII->get(RISCV::VX_PRED))
-        .addReg(NotCondReg);
+        .addReg(NotCondReg);*/
 
       Changed = true;
     }
-    /*if (predInstr) {
+    if (predInstr) {
       LLVM_DEBUG(dbgs() << "*** unused VX_PRED! distance=" << distance << "\n");
       predInstr->removeFromParent();      
-    }*/
+    }
   }
 
-  for (auto &MBB : MF) {      
+  /*for (auto &MBB : MF) {      
     MachineInstr *splitInstr = nullptr;
     int distance = 0;
     for (auto &MI : MBB) {
@@ -1158,7 +1155,7 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
       ++distance;
       Changed = true;
     }
-  }
+  }*/
 
 #endif
 

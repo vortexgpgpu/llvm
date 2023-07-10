@@ -75,7 +75,7 @@ let TargetPrefix = "riscv" in {
   // Vortex extension
   def int_riscv_vx_tmask : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrHasSideEffects]>;
   def int_riscv_vx_tmc   : Intrinsic<[], [llvm_anyint_ty], [IntrNoMem, IntrHasSideEffects, IntrConvergent]>;
-  def int_riscv_vx_pred  : Intrinsic<[], [llvm_anyint_ty], [IntrNoMem, IntrHasSideEffects, IntrConvergent]>;
+  def int_riscv_vx_pred  : Intrinsic<[], [llvm_anyint_ty, llvm_anyint_ty], [IntrNoMem, IntrHasSideEffects, IntrConvergent]>;
   def int_riscv_vx_split : Intrinsic<[llvm_anyint_ty], [llvm_anyint_ty], [IntrNoMem, IntrHasSideEffects, IntrConvergent]>;
   def int_riscv_vx_join  : Intrinsic<[], [llvm_anyint_ty], [IntrNoMem, IntrHasSideEffects, IntrConvergent]>;
 
