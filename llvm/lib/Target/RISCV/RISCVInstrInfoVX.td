@@ -23,16 +23,18 @@ class VXInstR4<RISCVOpcode opcode, dag outs, dag ins, string opcodestr, string a
   let Opcode = opcode.Value;
 }
 
-let hasSideEffects = 1, mayStore = 1 , mayLoad = 1 in {
+let hasSideEffects = 1, mayStore = 0 , mayLoad = 0 in {
 
 def VX_TMC : RVInstR<0, 0, RISCV_CUSTOM0, (outs), (ins GPR:$rs1), "vx_tmc", "$rs1">, Sched<[]> {
     let rd  = 0;
     let rs2 = 0;
+    let isBarrier = 1;
 }
 
 def VX_PRED : RVInstR<0, 0, RISCV_CUSTOM0, (outs), (ins GPR:$rs1), "vx_pred", "$rs1">, Sched<[]> {
     let rd  = 0;
     let rs2 = 1;
+    let isBarrier = 1;
 }
 
 def VX_WSPAWN : RVInstR<0, 1, RISCV_CUSTOM0, (outs), (ins GPR:$rs1, GPR:$rs2), "vx_wspawn", "$rs1, $rs2">, Sched<[]> {
@@ -41,35 +43,33 @@ def VX_WSPAWN : RVInstR<0, 1, RISCV_CUSTOM0, (outs), (ins GPR:$rs1, GPR:$rs2), "
 
 def VX_SPLIT : RVInstR<0, 2, RISCV_CUSTOM0, (outs GPR:$rd), (ins GPR:$rs1), "vx_split", "$rd, $rs1">, Sched<[]> {
     let rs2 = 0;
+    let isBarrier = 1;
 }
 
 def VX_JOIN : RVInstR<0, 3, RISCV_CUSTOM0, (outs), (ins GPR:$rs1), "vx_join", "$rs1">, Sched<[]> {
     let rd  = 0;
     let rs2 = 0;
+    let isBarrier = 1;
 }
 
 def VX_BAR : RVInstR<0, 4, RISCV_CUSTOM0, (outs), (ins GPR:$rs1, GPR:$rs2), "vx_bar", "$rs1, $rs2">, Sched<[]> {
     let rd = 0;
+    let isBarrier = 1;
 }
 
-def VX_TEX : VXInstR4<RISCV_CUSTOM1, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2, GPR:$rs3), "vx_tex", "$rd, $rs1, $rs2, $rs3">, Sched<[]> {
-    let funct2 = 0;
+def VX_TEX : VXInstR4<RISCV_CUSTOM1, (outs GPR:$rd), (ins uimm2:$funct2, GPR:$rs1, GPR:$rs2, GPR:$rs3), "vx_tex", "$rd, $funct2, $rs1, $rs2, $rs3">, Sched<[]> {
     let funct3 = 0;
 }
 
 def VX_CMOV : VXInstR4<RISCV_CUSTOM1, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2, GPR:$rs3), "vx_cmov", "$rd, $rs1, $rs2, $rs3">, Sched<[]> {
-    let funct2 = 1;
-    let funct3 = 0;
+    let funct3 = 1;
+    let funct2 = 0;
 }
 
 def VX_ROP : VXInstR4<RISCV_CUSTOM1, (outs), (ins GPR:$rs1, GPR:$rs2, GPR:$rs3), "vx_rop", "$rs1, $rs2, $rs3">, Sched<[]> {
-    let funct2 = 2;
-    let funct3 = 0;
-    let rd     = 0;
-}
-
-def VX_IMADD : VXInstR4<RISCV_CUSTOM1, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2, GPR:$rs3, uimm2:$funct2), "vx_imadd", "$rd, $rs1, $rs2, $rs3, $funct2">, Sched<[]> {
     let funct3 = 1;
+    let funct2 = 1;
+    let rd     = 0;
 }
 
 def VX_RAST : RVInstR<1, 0, RISCV_CUSTOM0, (outs GPR:$rd), (ins), "vx_rast", "">, Sched<[]> {

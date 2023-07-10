@@ -1190,6 +1190,8 @@ bool StructurizeCFG::makeUniformRegion(Region *R,
 bool StructurizeCFG::skipRegionalBranches(Region *R, 
                                           LegacyDivergenceAnalysis *DA,
                                           PostDominatorTree* PDT) {
+  // Do not structurize region with uniform branches
+  // also do not structurize regions with regional divergent branches
   for (auto E : R->elements()) {   
     if (E->isSubRegion())
       continue;
@@ -1210,10 +1212,10 @@ bool StructurizeCFG::skipRegionalBranches(Region *R,
 
     // this basic block is divergent and non-regional
     LLVM_DEBUG(dbgs() << "*** structurize: divergent non-regional block: " << *R << "\n");
-    return true;
+    return false;
   }
 
-  return false;
+  return true;
 }
 
 /// Run the transformation for each region found

@@ -37,6 +37,17 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/PostDominators.h"
 
+#include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineConstantPool.h"
+#include "llvm/CodeGen/MachineDominators.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
+#include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
+
 #include <iostream>
 
 using namespace vortex;
@@ -48,6 +59,8 @@ using namespace llvm::PatternMatch;
 #ifndef NDEBUG
 #define LLVM_DEBUG(x) do {x;} while (false)
 #endif
+
+//#define USE_MI
 
 namespace vortex {
 
@@ -244,6 +257,9 @@ static BasicBlock* SplitBasicBlockBefore(BasicBlock* BB, BasicBlock::iterator I,
 ///////////////////////////////////////////////////////////////////////////////
 
 struct VortexBranchDivergence0 : public FunctionPass {
+private:
+  LegacyDivergenceAnalysis *DA_;
+
 public:
 
   static char ID;
@@ -273,6 +289,9 @@ private:
   std::vector<BasicBlock*> div_blocks_;
   DenseSet<BasicBlock*> div_blocks_set_;
 
+  std::vector<Loop*> loops_;
+  DenseSet<Loop*> loops_set_;
+
   LegacyDivergenceAnalysis *DA_;
   DominatorTree *DT_;
   PostDominatorTree *PDT_;
@@ -281,6 +300,9 @@ private:
 
   Type* SizeTTy_;
 
+  Function *tmask_func_;
+  Function *pred_func_;
+  Function *tmc_func_;
   Function *split_func_;
   Function *join_func_;
 
@@ -290,7 +312,7 @@ private:
 
   void processLoops(LLVMContext* context, Function* function);
 
-  bool isUniform(BranchInst *T);
+  bool isUniform(Instruction *T);
 
 public:
 
@@ -303,6 +325,21 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override;
 
   bool runOnFunction(Function &F) override;
+};
+
+///////////////////////////////////////////////////////////////////////////////
+
+struct VortexBranchDivergence2 : public MachineFunctionPass {
+private:  
+  std::string PassName_;
+
+public: 
+  static char ID; 
+  VortexBranchDivergence2(const char* PassName);
+
+  bool runOnMachineFunction(MachineFunction &MF) override;
+
+  StringRef getPassName() const override;
 };
 
 }
@@ -322,10 +359,17 @@ FunctionPass *createVortexBranchDivergence1Pass(int divergenceMode) {
   return new VortexBranchDivergence1(divergenceMode);
 }
 
+FunctionPass *createVortexBranchDivergence2Pass(const char* PassName) {
+  return new VortexBranchDivergence2(PassName);
 }
 
-INITIALIZE_PASS(VortexBranchDivergence0, "vortex-branch-divergence-0",
-                "Vortex Unify Function Exit Nodes", false, false)
+}
+
+INITIALIZE_PASS_BEGIN(VortexBranchDivergence0, "vortex-branch-divergence-0",
+                "Vortex Branch Divergence Pre-Pass", false, false)
+INITIALIZE_PASS_DEPENDENCY(LegacyDivergenceAnalysis)
+INITIALIZE_PASS_END(VortexBranchDivergence0, "vortex-branch-divergence-0",
+                    "Vortex Branch Divergence Pre-Pass", false, false)
 
 INITIALIZE_PASS_BEGIN(VortexBranchDivergence1, "vortex-branch-divergence-1",
                       "Vortex Branch Divergence", false, false)
@@ -338,6 +382,9 @@ INITIALIZE_PASS_DEPENDENCY(LegacyDivergenceAnalysis)
 INITIALIZE_PASS_DEPENDENCY(TargetPassConfig)
 INITIALIZE_PASS_END(VortexBranchDivergence1, "vortex-branch-divergence-1",
                     "Vortex Branch Divergence", false, false)
+
+INITIALIZE_PASS(VortexBranchDivergence2, "VortexBranchDivergence-2",
+                "Vortex Branch Divergence Post-Pass", false, false)
 
 namespace vortex {
 
@@ -354,12 +401,14 @@ VortexBranchDivergence0::VortexBranchDivergence0() : FunctionPass(ID) {
 void VortexBranchDivergence0::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addPreservedID(BreakCriticalEdgesID);
   AU.addPreservedID(LowerSwitchID);
+  AU.addRequired<LegacyDivergenceAnalysis>();
   AU.addRequired<TargetPassConfig>();
   FunctionPass::getAnalysisUsage(AU);
 }
 
 bool VortexBranchDivergence0::runOnFunction(Function &F) {
   // Check if the Vortex extension is enabled
+  auto &Context = F.getContext();
   const auto &TPC = getAnalysis<TargetPassConfig>();
   const auto &TM = TPC.getTM<TargetMachine>();  
   const auto &ST = TM.getSubtarget<RISCVSubtarget>(F);
@@ -370,27 +419,79 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
 
   LLVM_DEBUG(dbgs() << "*** before Pass0 changes!\n" << F << "\n");
 
-  bool changed = false;
+  DA_ = &getAnalysis<LegacyDivergenceAnalysis>();
+
+  bool changed = false;  
 
   {
     // Lower Select instructions into standard if-then-else branches  
     SmallVector <SelectInst*, 4> selects; 
     
     for (auto I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-      if (auto SI = dyn_cast<SelectInst>(&*I))
+      if (auto SI = dyn_cast<SelectInst>(&*I)) {
+        if (DA_->isUniform(SI))
+          continue;
+        LLVM_DEBUG(dbgs() << "*** unswitching divergent select instruction: " << *SI << "\n");
         selects.emplace_back(SI);
+      }
     }
 
     for (auto SI : selects) {
       auto BB = SI->getParent();
       SplitBlockAndInsertIfThen(SI->getCondition(), SI, false);
       auto CondBr = cast<BranchInst>(BB->getTerminator());
-      auto ThenBB = CondBr->getSuccessor(0);  
+      auto ThenBB = CondBr->getSuccessor(0); 
       auto Phi = PHINode::Create(SI->getType(), 2, "unswitched.select", SI);
       Phi->addIncoming(SI->getTrueValue(), ThenBB);
       Phi->addIncoming(SI->getFalseValue(), BB);
       SI->replaceAllUsesWith(Phi);
       SI->eraseFromParent();
+      changed = true;
+    }
+  }
+
+  {
+    // Lower Min/Max intrinsics into standard if-then-else branches  
+    SmallVector <MinMaxIntrinsic*, 4> MMs; 
+    
+    for (auto I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+      if (auto MMI = dyn_cast<MinMaxIntrinsic>(&*I)) {
+        if (DA_->isUniform(MMI))
+          continue;
+        LLVM_DEBUG(dbgs() << "*** unswitching divergent min/max instruction: " << *MMI << "\n");
+        auto ID = MMI->getIntrinsicID();
+        if (ID == Intrinsic::smin 
+         || ID == Intrinsic::smax
+         || ID == Intrinsic::umin
+         || ID == Intrinsic::umax) {
+          MMs.emplace_back(MMI);
+        }
+      }
+    }
+
+    for (auto MMI : MMs) {
+      auto BB = MMI->getParent();
+      auto ID = MMI->getIntrinsicID();
+      auto LHS = MMI->getArgOperand(0);
+      auto RHS = MMI->getArgOperand(1);
+      IRBuilder<> Builder(MMI);
+      auto Cond = (ID == Intrinsic::smin || ID == Intrinsic::smax)
+                  ? Builder.CreateICmpSLT(LHS, RHS)
+                  : Builder.CreateICmpULT(LHS, RHS);     
+      SplitBlockAndInsertIfThen(Cond, MMI, false);
+      auto CondBr = cast<BranchInst>(BB->getTerminator());
+      auto ThenBB = CondBr->getSuccessor(0);
+      auto Phi = PHINode::Create(MMI->getType(), 2, "unswitched.minmax", MMI);      
+      if (ID == Intrinsic::smin || ID == Intrinsic::umin) {
+        Phi->addIncoming(LHS, ThenBB);
+        Phi->addIncoming(RHS, BB);
+      } else {
+        Phi->addIncoming(RHS, ThenBB);
+        Phi->addIncoming(LHS, BB);
+      }
+      MMI->replaceAllUsesWith(Phi);
+      MMI->eraseFromParent();
+      changed = true;
     }
   }
 
@@ -414,19 +515,20 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
     } else if (ReturningBlocks.size() == 1) {
       ReturnBlock = ReturningBlocks.front();
     } else {
-      // Otherwise, we need to insert a new basic block into the function, add a PHI
+      // Otherwise, fold all returns into a single exit block.
+      // We need to insert a new basic block into the function, add PHI
       // nodes (if the function returns values), and convert all of the return
       // instructions into unconditional branches.
-      BasicBlock *NewRetBlock = BasicBlock::Create(F.getContext(), "UnifiedReturnBlock", &F);
+      BasicBlock *NewRetBlock = BasicBlock::Create(Context, "UnifiedReturnBlock", &F);
 
       PHINode *PN = nullptr;
       if (F.getReturnType()->isVoidTy()) {
-        ReturnInst::Create(F.getContext(), nullptr, NewRetBlock);
+        ReturnInst::Create(Context, nullptr, NewRetBlock);
       } else {
         // If the function doesn't return void... add a PHI node to the block...
         PN = PHINode::Create(F.getReturnType(), ReturningBlocks.size(), "UnifiedRetVal");      
         PN->insertInto(NewRetBlock, NewRetBlock->end());
-        ReturnInst::Create(F.getContext(), PN, NewRetBlock);
+        ReturnInst::Create(Context, PN, NewRetBlock);
       }
 
       // Loop over all of the blocks, replacing the return instruction with an
@@ -453,11 +555,12 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
     } else if (UnreachableBlocks.size() == 1) {
       UnreachableBlock = UnreachableBlocks.front();
     } else {
-      UnreachableBlock = BasicBlock::Create(F.getContext(), "UnifiedUnreachableBlock", &F);
-      new UnreachableInst(F.getContext(), UnreachableBlock);
+      UnreachableBlock = BasicBlock::Create(Context, "UnifiedUnreachableBlock", &F);
+      new UnreachableInst(Context, UnreachableBlock);
       for (BasicBlock *BB : UnreachableBlocks) {
         BB->back().eraseFromParent();  // Remove the unreachable inst.
-        BranchInst::Create(UnreachableBlock, BB);
+        auto Br = BranchInst::Create(UnreachableBlock, BB);
+        Br->setMetadata("Unreachable", MDNode::get(Context, std::nullopt));
       }
       changed = true;
     }
@@ -465,13 +568,13 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
     // Ensure single exit block
     if (UnreachableBlock && ReturnBlock) {
       
-      auto NewRetBlock = BasicBlock::Create(F.getContext(), "UnifiedReturnBlock2", &F);
+      auto NewRetBlock = BasicBlock::Create(Context, "UnifiedReturnAndUnreachableBlock", &F);
       auto RetType = F.getReturnType();
       PHINode* PN = nullptr; 
       
       if (!RetType->isVoidTy()) {
         // Need to insert PhI node to merge return values from incoming blocks
-        PN = PHINode::Create(RetType, ReturningBlocks.size(), "UnifiedRetVal2");
+        PN = PHINode::Create(RetType, ReturningBlocks.size(), "UnifiedReturnAndUnreachableVal");
         PN->insertInto(NewRetBlock, NewRetBlock->end());
 
         auto DummyRetValue = llvm::Constant::getNullValue(RetType);
@@ -480,10 +583,11 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
         PN->addIncoming(ReturnBlock->getTerminator()->getOperand(0), ReturnBlock);
       }
 
-      ReturnInst::Create(F.getContext(), PN, NewRetBlock);
+      ReturnInst::Create(Context, PN, NewRetBlock);
 
       UnreachableBlock->back().eraseFromParent();
-      BranchInst::Create(NewRetBlock, UnreachableBlock);
+      auto Br = BranchInst::Create(NewRetBlock, UnreachableBlock);
+      Br->setMetadata("Unreachable", llvm::MDNode::get(Context, std::nullopt));
       
       ReturnBlock->back().eraseFromParent();
       BranchInst::Create(NewRetBlock, ReturnBlock);
@@ -497,7 +601,7 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
     LLVM_DEBUG(dbgs() << "*** after Pass0 changes!\n" << F << "\n");
   }
 
-  return true;
+  return changed;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -539,6 +643,9 @@ void VortexBranchDivergence1::initialize(Function &F, const RISCVSubtarget &ST) 
     LLVM_DEBUG(dbgs() << "Error: invalid pointer size: " << sizeTSize << "\n");
   }
 
+  tmask_func_ = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_tmask, {SizeTTy_});
+  pred_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_pred, {SizeTTy_});
+  tmc_func_   = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_tmc, {SizeTTy_});
   split_func_ = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_split, {SizeTTy_, SizeTTy_});
   join_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_join, {SizeTTy_}); 
 
@@ -552,6 +659,8 @@ void VortexBranchDivergence1::initialize(Function &F, const RISCVSubtarget &ST) 
   replaceSuccessor_.init(&F);
   div_blocks_.clear();
   div_blocks_set_.clear();
+  loops_.clear();
+  loops_set_.clear();
 }
 
 bool VortexBranchDivergence1::runOnFunction(Function &F) {
@@ -568,6 +677,8 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
   LLVM_DEBUG(dbgs() << "*** Region info:\n");
   LLVM_DEBUG(RI_->getTopLevelRegion()->dump());
   LLVM_DEBUG(dbgs() << "\n");
+
+  bool changed = false;
     
   for (auto I = df_begin(&F.getEntryBlock()),
             E = df_end(&F.getEntryBlock()); I != E; ++I) {
@@ -589,27 +700,141 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
       continue;
     }    
 
-    auto ipdom = PDT_->findNearestCommonDominator(Br->getSuccessor(0), Br->getSuccessor(1));
-    if (ipdom == nullptr) {
-      llvm::errs() << "warning: divergent branch with no IPDOM: " << namePrinter_.BBName(BB) << " --- skipping.\n";
-      continue;
-    }
-    if (div_blocks_set_.insert(BB).second) {
-      // add new branch to the list
-      LLVM_DEBUG(dbgs() << "*** divergent branch: " << namePrinter_.BBName(BB) << "\n");
-      div_blocks_.push_back(BB);
+    auto loop = LI_->getLoopFor(BB);     
+    if (loop) {   
+      auto ipdom = PDT_->findNearestCommonDominator(Br->getSuccessor(0), Br->getSuccessor(1));
+      if (ipdom && loop->contains(ipdom)) {
+        if (div_blocks_set_.insert(BB).second) {
+          // add new branch to the list
+          LLVM_DEBUG(dbgs() << "*** divergent branch: " << namePrinter_.BBName(BB) << "\n");
+          div_blocks_.push_back(BB);
+        }
+      } else {
+        if (loops_set_.insert(loop).second) {
+          // add new loop to the list
+          LLVM_DEBUG(dbgs() << "*** divergent loop: " << namePrinter_.BBName(loop->getHeader()) << "\n");
+          loops_.push_back(loop);
+        }
+      }
+    } else {      
+      auto ipdom = PDT_->findNearestCommonDominator(Br->getSuccessor(0), Br->getSuccessor(1));
+      if (ipdom == nullptr) {
+        llvm::errs() << "Warning: divergent branch with no IPDOM: " << namePrinter_.BBName(BB) << " --- skipping.\n";
+        continue;
+      }
+      bool has_unreacheable = false;
+      for (auto succ : Br->successors()) {
+        if (succ->back().getMetadata("Unreachable") != nullptr) {
+          has_unreacheable = true;
+          break;          
+        }
+      }      
+      if (has_unreacheable) {
+        llvm::errs() << "Warning: divergent branch with unreachable IPDOM: " << namePrinter_.BBName(BB) << " --- skipping.\n";
+        continue;
+      }
+      if (div_blocks_set_.insert(BB).second) {
+        // add new branch to the list
+        LLVM_DEBUG(dbgs() << "*** divergent branch: " << namePrinter_.BBName(BB) << ", IPDOM=" << namePrinter_.BBName(ipdom) << "\n");
+        div_blocks_.push_back(BB);
+      }
     }
   }
 
   // apply transformation
-  if (!div_blocks_.empty()) {
+  if (!loops_.empty() || !div_blocks_.empty()) {
     LLVM_DEBUG(dbgs() << "*** before changes!\n" << F << "\n");
-    this->processBranches(&Context, &F);
-    div_blocks_.clear();
+
+    // process the loop
+    // This should be done first such that loop analysis is not tempered
+    if (!loops_.empty()) {
+      this->processLoops(&Context, &F);      
+      loops_.clear();
+      // update PDT
+      PDT_->recalculate(F);
+    }
+
+    // process branches
+    if (!div_blocks_.empty()) {
+      this->processBranches(&Context, &F);
+      div_blocks_.clear();    
+    }    
+
+    changed = true;
+
     LLVM_DEBUG(dbgs() << "*** after changes!\n" << F << "\n");
   }
 
-  return true;
+  return changed;
+}
+
+void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* function) {
+  DenseSet<const BasicBlock *> stub_blocks;
+
+  // traverse the list in reverse order
+  for (auto it = loops_.rbegin(), ite = loops_.rend(); it != ite; ++it) {
+    auto loop = *it;
+    auto header = loop->getHeader();
+
+    auto preheader = loop->getLoopPreheader();
+    assert(preheader);
+
+    auto preheader_term = preheader->getTerminator();
+    assert(preheader_term);
+
+    auto preheader_br = dyn_cast<BranchInst>(preheader_term);
+    assert(preheader_br);
+
+    LLVM_DEBUG(dbgs() << "*** process loop: " << namePrinter_.BBName(header) << "\n");
+
+    // save current thread mask in preheader
+    auto tmask = CallInst::Create(tmask_func_, "tmask", preheader_br);
+    LLVM_DEBUG(dbgs() << "*** backup thread mask '" << namePrinter_.ValueName(tmask) << "' before loop preheader branch: " << namePrinter_.BBName(preheader) << "\n");
+        
+    // restore thread mask at loop exit blocks
+    {
+      SmallVector <BasicBlock *, 8> exiting_blocks;
+      loop->getExitingBlocks(exiting_blocks); // blocks inside the loop going out
+
+      for (auto exiting_block : exiting_blocks) {
+        int exit_edges = false;        
+        auto branch = dyn_cast<BranchInst>(exiting_block->getTerminator());
+        for (auto succ : branch->successors()) {
+          // stub blocks insertion will generate invalid exiting blocks.
+          // we just need exclude those new blocks.
+          if (loop->contains(succ) 
+           || stub_blocks.count(succ) != 0)
+            continue;
+
+          if (branch->isUnconditional())
+            continue;
+
+          // ensure only one exit edge
+          assert(exit_edges == 0);
+          ++exit_edges;
+
+          // insert a predicate instruction to mask out threads that are exiting the loop            
+          IRBuilder<> ir_builder(branch);
+          auto cond = branch->getCondition();
+          auto not_cond = ir_builder.CreateNot(cond, namePrinter_.ValueName(cond) + ".not");
+          auto not_cond_i32 = ir_builder.CreateIntCast(not_cond, SizeTTy_, false, namePrinter_.ValueName(not_cond) + ".i32");
+          LLVM_DEBUG(dbgs() << "*** insert thread predicate '" << namePrinter_.ValueName(not_cond_i32) << "' before exiting block: " << namePrinter_.BBName(exiting_block) << "\n");          
+          CallInst::Create(pred_func_, not_cond_i32, "", branch);
+          
+          // restore thread mask before corresponding exit blocks          
+          auto stub = BasicBlock::Create(*context, "loop_exit_stub", function, succ);
+          LLVM_DEBUG(dbgs() << "*** restore thread mask in stub '" << stub->getName() << "' before exit block: " << namePrinter_.BBName(succ) << "\n");
+          stub_blocks.insert(stub);
+          auto stub_br = BranchInst::Create(succ, stub);          
+          bool found = replaceSuccessor_.replaceSuccessor(exiting_block, succ, stub);
+          if (!found) {
+            std::abort();
+          }
+          CallInst::Create(tmc_func_, tmask, "", stub_br);
+        }
+      }
+    }
+  }
 }
 
 void VortexBranchDivergence1::processBranches(LLVMContext* context, Function* function) {  
@@ -662,9 +887,9 @@ void VortexBranchDivergence1::processBranches(LLVMContext* context, Function* fu
   }
 }
 
-bool VortexBranchDivergence1::isUniform(BranchInst *Br) {
-  return DA_->isUniform(Br)
-      || (Br->getMetadata("structurizecfg.uniform") != nullptr);
+bool VortexBranchDivergence1::isUniform(Instruction *I) {
+  return DA_->isUniform(I)
+      || (I->getMetadata("structurizecfg.uniform") != nullptr);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -695,7 +920,7 @@ void DivergenceTracker::initialize() {
 
   for (auto& BB : *function_) {
     for (auto& I : BB) {      
-      LLVM_DEBUG(dbgs() << "*** instruction: opcode=" << I.getOpcodeName() << ", name=" << I.getName() << "\n");
+      //LLVM_DEBUG(dbgs() << "*** instruction: opcode=" << I.getOpcodeName() << ", name=" << I.getName() << "\n");
       if (I.getMetadata("vortex.uniform") != NULL) {
         uv_annotations.insert(&I);
         uv_nodes_.insert(&I);
@@ -748,7 +973,6 @@ void DivergenceTracker::initialize() {
     for (auto& I : BB) {
       if (auto GE = dyn_cast<GetElementPtrInst>(&I)) {
         auto addr = GE->getPointerOperand();
-        LLVM_DEBUG(dbgs() << "*** GetElementPtr: " << GE->getName() << ".src()" << addr << ")\n");
         if (uv_annotations.count(addr) != 0) {
           LLVM_DEBUG(dbgs() << "*** uniform annotation: " << GE->getName() << "\n");
           uv_nodes_.insert(GE);
@@ -837,5 +1061,114 @@ bool DivergenceTracker::eval(const Value *V) {
 
   return false;
 }
+
+///////////////////////////////////////////////////////////////////////////////
+
+VortexBranchDivergence2::VortexBranchDivergence2(const char* PassName) 
+  : MachineFunctionPass(ID)
+  , PassName_(PassName)
+{}
+
+bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
+  const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
+  bool Changed = false;
+
+#ifdef USE_MI
+
+  for (auto &MBB : MF) {      
+    //MachineInstr *predInstr = nullptr;
+    //int distance = 0;
+    for (auto &MI : MBB) {
+      /*if (MI.getOpcode() == RISCV::VX_PRED) {
+        if (predInstr) {          
+          LLVM_DEBUG(dbgs() << "*** duplicate VX_PRED! distance=" << distance << "\n");
+          predInstr->removeFromParent();
+        }
+        predInstr = &MI;
+        distance = 0;
+      }
+      if (predInstr && MI.isBranch()) {
+        if (distance != 1) {
+          LLVM_DEBUG(dbgs() << "*** moving VX_PRED! distance=" << distance << "\n");
+          predInstr->removeFromParent();
+          MBB.insert(MI.getIterator(), predInstr);
+        } else {
+          LLVM_DEBUG(dbgs() << "*** correct VX_PRED distance=" << distance << "\n");
+        }
+        predInstr = nullptr;
+      }
+      ++distance;*/
+
+      if (!MI.isBranch())
+        continue;
+      if (!MI.isConditionalBranch())
+        continue;
+      auto &Cond = MI.getOperand(0);
+      if (!Cond.isReg())
+        continue;
+      auto BB = MBB.getBasicBlock();
+      if (!BB)
+        continue;
+      auto Term = BB->getTerminator();
+      if (Term->getMetadata("Predicate") == nullptr)
+        continue;
+
+      LLVM_DEBUG(dbgs() << "*** found Predicate! in " << PassName_ << "\n");
+
+      auto &DL = MI.getDebugLoc();
+      auto NotCondReg = MF.getRegInfo().createVirtualRegister(&RISCV::GPRRegClass);
+      auto CondReg = Cond.getReg();
+      BuildMI(MBB, MI, DL, TII->get(RISCV::SLTIU), NotCondReg)
+        .addReg(CondReg)
+        .addImm(1);
+      BuildMI(MBB, MI, DL, TII->get(RISCV::VX_PRED))
+        .addReg(NotCondReg);
+
+      Changed = true;
+    }
+    /*if (predInstr) {
+      LLVM_DEBUG(dbgs() << "*** unused VX_PRED! distance=" << distance << "\n");
+      predInstr->removeFromParent();      
+    }*/
+  }
+
+  for (auto &MBB : MF) {      
+    MachineInstr *splitInstr = nullptr;
+    int distance = 0;
+    for (auto &MI : MBB) {
+      if (MI.getOpcode() == RISCV::VX_SPLIT) {
+        splitInstr = &MI;
+        distance = 0;
+      }
+      if (splitInstr && MI.isBranch()) {
+        assert(MI.isConditionalBranch());
+        auto &Cond = MI.getOperand(0);
+        assert(Cond.isReg());        
+        if (distance != 1) {
+          LLVM_DEBUG(dbgs() << "*** moving VX_SPLIT! distance=" << distance << "\n");
+          splitInstr->removeFromParent();
+          MBB.insert(MI.getIterator(), splitInstr);
+        } else {
+          LLVM_DEBUG(dbgs() << "*** correct VX_SPLIT distance=" << distance << "\n");
+        }
+        //auto CondReg = Cond.getReg();
+        //splitInstr->getOperand(0).setReg(CondReg);
+        splitInstr = nullptr;
+      }
+      ++distance;
+      Changed = true;
+    }
+  }
+
+#endif
+
+  return Changed;
+}
+
+StringRef VortexBranchDivergence2::getPassName() const { 
+  return "VortexBranchDivergence2"; 
+}
+
+char VortexBranchDivergence2::ID = 0;
 
 } // vortex

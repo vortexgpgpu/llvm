@@ -309,12 +309,13 @@ bool RISCVPassConfig::addPreISel() {
 
   if (getRISCVTargetMachine().isVortex() 
    && EnableVortexBranchDivergence != 0) {
+    addPass(createCFGSimplificationPass());
     addPass(createSinkingPass());
     addPass(createLoopSimplifyCFGPass());
     addPass(createLowerSwitchPass());
     addPass(createFlattenCFGPass());
     addPass(createVortexBranchDivergence0Pass());
-    addPass(createStructurizeCFGPass(true, (EnableVortexBranchDivergence > 1)));
+    addPass(createStructurizeCFGPass(true, (EnableVortexBranchDivergence == 1)));
     addPass(createVortexBranchDivergence1Pass(EnableVortexBranchDivergence));
   }
   return false;
@@ -377,6 +378,7 @@ void RISCVPassConfig::addPreRegAlloc() {
   if (TM->getOptLevel() != CodeGenOpt::None)
     addPass(createRISCVMergeBaseOffsetOptPass());
   addPass(createRISCVInsertVSETVLIPass());
+  addPass(createVortexBranchDivergence2Pass("addPreRegAlloc"));
 }
 
 void RISCVPassConfig::addPostRegAlloc() {
