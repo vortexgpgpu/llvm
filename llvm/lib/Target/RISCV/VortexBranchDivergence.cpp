@@ -431,13 +431,13 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
       if (auto SI = dyn_cast<SelectInst>(&*I)) {
         if (DA_->isUniform(SI))
           continue;
-        LLVM_DEBUG(dbgs() << "*** unswitching divergent select instruction: " << *SI << "\n");
         selects.emplace_back(SI);
       }
     }
 
     for (auto SI : selects) {
       auto BB = SI->getParent();
+      LLVM_DEBUG(dbgs() << "*** unswitching divergent select instruction: " << *SI << "\n");
       SplitBlockAndInsertIfThen(SI->getCondition(), SI, false);
       auto CondBr = cast<BranchInst>(BB->getTerminator());
       auto ThenBB = CondBr->getSuccessor(0); 
@@ -458,7 +458,6 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
       if (auto MMI = dyn_cast<MinMaxIntrinsic>(&*I)) {
         if (DA_->isUniform(MMI))
           continue;
-        LLVM_DEBUG(dbgs() << "*** unswitching divergent min/max instruction: " << *MMI << "\n");
         auto ID = MMI->getIntrinsicID();
         if (ID == Intrinsic::smin 
          || ID == Intrinsic::smax
@@ -470,6 +469,7 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
     }
 
     for (auto MMI : MMs) {
+      LLVM_DEBUG(dbgs() << "*** unswitching divergent min/max instruction: " << *MMI << "\n");
       auto BB = MMI->getParent();
       auto ID = MMI->getIntrinsicID();
       auto LHS = MMI->getArgOperand(0);

@@ -37,6 +37,7 @@
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
+#include "llvm/Transforms/Scalar/Scalarizer.h"
 #include <optional>
 using namespace llvm;
 
@@ -309,6 +310,7 @@ bool RISCVPassConfig::addPreISel() {
 
   if (getRISCVTargetMachine().isVortex() 
    && EnableVortexBranchDivergence != 0) {
+    addPass(createScalarizerPass());
     addPass(createCFGSimplificationPass());
     addPass(createSinkingPass());
     addPass(createLoopSimplifyCFGPass());
