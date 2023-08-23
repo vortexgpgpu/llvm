@@ -85,3 +85,25 @@ def : Pat<(int_riscv_vx_pred GPR:$rs1, GPR:$rs2), (VX_PRED GPR:$rs1, GPR:$rs2)>;
 def : Pat<(int_riscv_vx_split GPR:$rs1), (VX_SPLIT GPR:$rs1)>;
 
 def : Pat<(int_riscv_vx_join GPR:$rs1), (VX_JOIN GPR:$rs1)>;
+
+def CSR_NT : SysReg<"nt", 0xFC0>;
+def CSR_NW : SysReg<"nw", 0xFC1>;
+def CSR_NC : SysReg<"nw", 0xFC2>;
+def CSR_NG : SysReg<"nw", 0xFC3>;
+def CSR_TID : SysReg<"tid", 0xCC0>;
+def CSR_WID : SysReg<"wid", 0xCC1>;
+def CSR_CID : SysReg<"cid", 0xCC2>;
+def CSR_GID : SysReg<"gid", 0xCC3>;
+
+def : Pat<(int_riscv_vx_tid), (CSRRS CSR_TID.Encoding, X0)>;
+def : Pat<(int_riscv_vx_wid), (CSRRS CSR_WID.Encoding, X0)>;
+def : Pat<(int_riscv_vx_cid), (CSRRS CSR_CID.Encoding, X0)>;
+def : Pat<(int_riscv_vx_gid), (CSRRS CSR_GID.Encoding, X0)>;
+
+def : Pat<(int_riscv_vx_nt), (CSRRS CSR_NT.Encoding, X0)>;
+def : Pat<(int_riscv_vx_nw), (CSRRS CSR_NW.Encoding, X0)>;
+def : Pat<(int_riscv_vx_nc), (CSRRS CSR_NC.Encoding, X0)>;
+def : Pat<(int_riscv_vx_ng), (CSRRS CSR_NG.Encoding, X0)>;
+
+def : Pat<(int_riscv_vx_bar GPR:$rs1, GPR:$rs2), (VX_BAR GPR:$rs1, GPR:$rs2)>;
+

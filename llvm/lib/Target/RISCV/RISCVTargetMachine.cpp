@@ -319,6 +319,7 @@ bool RISCVPassConfig::addPreISel() {
     addPass(createVortexBranchDivergence0Pass());
     addPass(createStructurizeCFGPass(true, (EnableVortexBranchDivergence == 1)));
     addPass(createVortexBranchDivergence1Pass(EnableVortexBranchDivergence));
+    addPass(createVortexIntrinsicFuncLoweringPass());
   }
   return false;
 }

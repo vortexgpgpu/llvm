@@ -20,6 +20,7 @@
 namespace llvm {
 class AsmPrinter;
 class FunctionPass;
+class ModulePass;
 class InstructionSelector;
 class MCInst;
 class MCOperand;
@@ -79,6 +80,9 @@ void initializeVortexBranchDivergence1Pass(PassRegistry&);
 
 FunctionPass *createVortexBranchDivergence2Pass(const char* PassName);
 void initializeVortexBranchDivergence2Pass(PassRegistry&);
+
+ModulePass *createVortexIntrinsicFuncLoweringPass();
+void initializeVortexIntrinsicFuncLoweringPass(PassRegistry &);
 
 InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
                                                     RISCVSubtarget &,

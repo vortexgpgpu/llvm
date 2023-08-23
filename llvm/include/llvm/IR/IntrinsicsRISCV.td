@@ -79,6 +79,19 @@ let TargetPrefix = "riscv" in {
   def int_riscv_vx_split : Intrinsic<[llvm_anyint_ty], [llvm_anyint_ty], [IntrNoMem, IntrHasSideEffects, IntrConvergent]>;
   def int_riscv_vx_join  : Intrinsic<[], [llvm_anyint_ty], [IntrNoMem, IntrHasSideEffects, IntrConvergent]>;
 
+  // shin
+  def int_riscv_vx_bar  : Intrinsic<[], [llvm_anyint_ty, llvm_anyint_ty], [IntrNoMem]>;
+
+  def int_riscv_vx_tid : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+  def int_riscv_vx_wid : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+  def int_riscv_vx_cid : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+  def int_riscv_vx_gid : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+
+  def int_riscv_vx_nt : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+  def int_riscv_vx_nw : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+  def int_riscv_vx_nc : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+  def int_riscv_vx_ng : Intrinsic<[llvm_anyint_ty], [], [IntrNoMem, IntrWillReturn]>;
+
 } // TargetPrefix = "riscv"
 
 //===----------------------------------------------------------------------===//
