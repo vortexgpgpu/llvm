@@ -33,7 +33,7 @@
 using namespace llvm;
 // using namespace vortex;
 
-#define DEBUG_TYPE "llvm-vortex-barrier-lowering"
+#define DEBUG_TYPE "vortex-intrinsic-lowering"
 
 void printIR(llvm::Module *module_) {
   std::string module_str;
@@ -80,6 +80,7 @@ int CheckFTarget(std::vector<StringRef> FTargets, StringRef fname) {
 
 bool VortexIntrinsicFuncLowering::runOnModule(Module &M) {
   Modified = false;
+  std::cerr << "VORTEX Intrinsic Func pass " << std::endl;
 
   std::set<llvm::Function *> DeclToRemove;
   std::set<llvm::Instruction *> CallToRemove;

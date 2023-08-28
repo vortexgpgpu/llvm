@@ -94,6 +94,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
     initializeVortexBranchDivergence0Pass(*PR);
     initializeVortexBranchDivergence1Pass(*PR);
   }
+  initializeVortexIntrinsicFuncLoweringPass(*PR);
 }
 
 static StringRef computeDataLayout(const Triple &TT) {
@@ -307,6 +308,8 @@ bool RISCVPassConfig::addPreISel() {
                                   /* OnlyOptimizeForSize */ false,
                                   /* MergeExternalByDefault */ true));
   }
+  
+  printf("isVortex ? %d \n", getRISCVTargetMachine().isVortex());
 
   if (getRISCVTargetMachine().isVortex() 
    && EnableVortexBranchDivergence != 0) {

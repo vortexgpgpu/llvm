@@ -82,7 +82,7 @@ FunctionPass *createVortexBranchDivergence2Pass(const char* PassName);
 void initializeVortexBranchDivergence2Pass(PassRegistry&);
 
 ModulePass *createVortexIntrinsicFuncLoweringPass();
-void initializeVortexIntrinsicFuncLoweringPass(PassRegistry &);
+void initializeVortexIntrinsicFuncLoweringPass(PassRegistry&);
 
 InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
                                                     RISCVSubtarget &,
