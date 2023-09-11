@@ -135,6 +135,8 @@ bool VortexIntrinsicFuncLowering::runOnModule(Module &M) {
           continue;
         CallInst *CallInstr = dyn_cast<CallInst>(Instr);
         Function *Callee = CallInstr->getCalledFunction();
+        if (Callee == nullptr)
+          continue;
 
         int check = CheckFTarget(FTargets, Callee->getName());
 
