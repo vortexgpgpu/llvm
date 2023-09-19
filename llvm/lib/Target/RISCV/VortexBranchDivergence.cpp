@@ -815,12 +815,27 @@ void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* funct
 
           // insert a predicate instruction to mask out threads that are exiting the loop            
           IRBuilder<> ir_builder(branch);
-          auto cond = branch->getCondition();
-          auto not_cond = ir_builder.CreateNot(cond, namePrinter_.ValueName(cond) + ".not");
-          auto not_cond_i32 = ir_builder.CreateIntCast(not_cond, SizeTTy_, false, namePrinter_.ValueName(not_cond) + ".i32");
-          LLVM_DEBUG(dbgs() << "*** insert thread predicate '" << namePrinter_.ValueName(not_cond_i32) << "' before exiting block: " << namePrinter_.BBName(exiting_block) << "\n");          
-          CallInst::Create(pred_func_, {not_cond_i32, tmask}, "", branch);
+          if(branch->getNumSuccessors() == 2 ){
+            auto succ1 = branch->getSuccessor(1);
+        
+            auto cond = branch->getCondition();
+            if(loop->contains(succ1)){
+                cond = ir_builder.CreateNot(cond, namePrinter_.ValueName(cond) + ".not");
+            }
+            auto cond_i32 = ir_builder.CreateIntCast(cond, SizeTTy_, false, namePrinter_.ValueName(cond) + ".i32");
+            LLVM_DEBUG(dbgs() << "*** insert thread predicate '" << namePrinter_.ValueName(cond_i32) << "' before exiting block: " << namePrinter_.BBName(exiting_block) << "\n");          
+            CallInst::Create(pred_func_, {cond_i32, tmask}, "", branch);
           
+          }else{
+            auto cond = branch->getCondition();
+            auto not_cond = ir_builder.CreateNot(cond, namePrinter_.ValueName(cond) + ".not");
+            auto not_cond_i32 = ir_builder.CreateIntCast(not_cond, SizeTTy_, false, namePrinter_.ValueName(not_cond) + ".i32");
+            LLVM_DEBUG(dbgs() << "*** insert thread predicate '" << namePrinter_.ValueName(not_cond_i32) << "' before exiting block: " << namePrinter_.BBName(exiting_block) << "\n");          
+            CallInst::Create(pred_func_, {not_cond_i32, tmask}, "", branch);
+          }
+        
+          LLVM_DEBUG(dbgs() << "*** after predicate change!\n" << function << "\n");
+  
           /*// restore thread mask before corresponding exit blocks          
           auto stub = BasicBlock::Create(*context, "loop_exit_stub", function, succ);
           LLVM_DEBUG(dbgs() << "*** restore thread mask in stub '" << stub->getName() << "' before exit block: " << namePrinter_.BBName(succ) << "\n");
