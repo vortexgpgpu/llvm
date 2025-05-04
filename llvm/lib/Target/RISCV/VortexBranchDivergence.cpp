@@ -1263,16 +1263,19 @@ void DivergenceTracker::buildAllocaTaints() {
           }
 
           if (auto *AI = dyn_cast<AllocaInst>(Current)) {
-            auto ArgValPtr = cast<PointerType>(ArgVal->getType());
-            Type *PointeeType = ArgValPtr->getPointerTo();
-            uint64_t size = DL.getTypeAllocSize(PointeeType);
+            Type     *ElemTy    = AI->getAllocatedType();
+            uint64_t  elemSize  = DL.getTypeAllocSize(ElemTy);
+            uint64_t  taintSize = elemSize;
             if (!HasValidOffset) {
-              // Mark entire alloca
-              size = DL.getTypeAllocSize(AI->getAllocatedType());
+              // unknown offset ⇒ taint *entire* allocation
+              if (auto *CI = dyn_cast<ConstantInt>(AI->getArraySize())) {
+                taintSize = elemSize * CI->getZExtValue();
+              }
+              // for dynamic alloca: conservatively taint one element
               offset = 0;
             }
-            taints_[AI].push_back({ &I, (uint64_t)offset, size });
-            LLVM_DEBUG(dbgs() << "*** Tainted Allocation " << *AI << " bytes [" << offset << "," << (offset+size) << ") via call: " << I << "\n");
+            taints_[AI].push_back({ &I, (uint64_t)offset, taintSize });
+            LLVM_DEBUG(dbgs() << "*** Tainted Allocation " << *AI << ", offset [" << offset << ":" << (offset+taintSize) << "] via call: " << I << "\n");
           }
         }
       }
