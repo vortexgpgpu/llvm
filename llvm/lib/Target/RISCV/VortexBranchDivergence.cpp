@@ -49,6 +49,9 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/IR/Instructions.h"        // for CallBase, AllocaInst, LoadInst
+#include "llvm/IR/DerivedTypes.h"        // for PointerType
+#include "llvm/Analysis/ValueTracking.h" // for GetPointerBaseWithConstantOffset
 
 #include <iostream>
 
@@ -1067,14 +1070,16 @@ PreservedAnalyses UniformAnnotationPass::run(Function &F, FunctionAnalysisManage
 
   std::vector<std::pair<Instruction*, bool>> uniformInsts;
 
+  // collect uniform IR annoations
   for (auto& BB : F) {
     for (auto& I : BB) {
-      // find uniform metadata
+      // process metadata-based annotations
       if (I.getMetadata("vortex.uniform") != nullptr) {
-        uniformInsts.push_back({&I, false});
+        LLVM_DEBUG(dbgs() << "*** found metadata annotation: " << I << "\n");
+        uniformInsts.push_back({&I, false}); // false = metadata annotation
         continue;
       }
-      // find uniform annotations
+      // process intrinsic-based annotations
       if (auto II = dyn_cast<IntrinsicInst>(&I)) {
         if (II->getIntrinsicID() == Intrinsic::var_annotation) {
           auto gv  = dyn_cast<GlobalVariable>(II->getOperand(1));
@@ -1082,7 +1087,8 @@ PreservedAnalyses UniformAnnotationPass::run(Function &F, FunctionAnalysisManage
           if (cda->getAsCString() == "vortex.uniform") {
             auto AnnotatedValue = dyn_cast<AllocaInst>(II->getOperand(0));
             if (AnnotatedValue) {
-              uniformInsts.push_back({AnnotatedValue, true});
+              LLVM_DEBUG(dbgs() << "*** found var_annotation: " << *AnnotatedValue << "\n");
+              uniformInsts.push_back({AnnotatedValue, true}); // true = var_annotation annotation
             }
             continue;
           }
@@ -1091,17 +1097,24 @@ PreservedAnalyses UniformAnnotationPass::run(Function &F, FunctionAnalysisManage
     }
   }
 
+  // process annotated values
   for (auto Instr : uniformInsts) {
     if (Instr.second) {
+      // handle var_annotation annotations
       auto AnnotatedValue = reinterpret_cast<AllocaInst*>(Instr.first);
       std::vector<LoadInst*> loadsToReplace;
       StoreInst* Store = nullptr;
+
+      // find all loads and stores to the annotated stack variable
       for (auto User : AnnotatedValue->users()) {
-        if (auto LI = dyn_cast<LoadInst>(User))
+        if (auto LI = dyn_cast<LoadInst>(User)) {
           loadsToReplace.push_back(LI);
-        if (auto SI = dyn_cast<StoreInst>(User))
-          Store = SI;
+        }
+        if (auto SI = dyn_cast<StoreInst>(User)) {
+          Store = SI; // the annotation has been applied to the stack variable
+        }
       }
+      // insert riscv_vx_uniform intrinsic before all uses of collected loads
       if (Store != nullptr) {
         IRBuilder<> Builder(Store->getNextNode());
         auto LoadedValue = Builder.CreateLoad(AnnotatedValue->getAllocatedType(), AnnotatedValue, AnnotatedValue->getName() + ".loaded");
@@ -1115,6 +1128,7 @@ PreservedAnalyses UniformAnnotationPass::run(Function &F, FunctionAnalysisManage
         changed = true;
       }
     } else {
+      // insert riscv_vx_uniform intrinsic before all uses of annotated instruction
       auto I = Instr.first;
       IRBuilder<> Builder(I->getNextNode());
       auto ValueType = I->getType();
@@ -1136,6 +1150,33 @@ DivergenceTracker::DivergenceTracker(const Function &function)
   , initialized_(false)
 {}
 
+// Return true if 'From' can reach 'To' in the *instruction‑level* CFG
+// (i.e. successor = next inst in same BB, or first inst of successor BB).
+bool canReachInst(const Instruction *From, const Instruction *To) {
+  SmallPtrSet<const Instruction*, 8> visited;
+  SmallVector<const Instruction*, 8> worklist{From};
+
+  while (!worklist.empty()) {
+    auto I = worklist.pop_back_val();
+    if (I == To) return true;
+    if (!visited.insert(I).second) continue; // Skip already visited
+
+    // 1) Check next instruction in same block
+    if (auto Next = I->getNextNode()) {
+      worklist.push_back(Next);
+    }
+    // 2) Handle terminators (branch to successor blocks)
+    else if (I->isTerminator()) {
+      for (auto Succ : successors(I->getParent())) {
+        if (!Succ->empty()) {
+          worklist.push_back(&Succ->front());
+        }
+      }
+    }
+  }
+  return false;
+}
+
 void DivergenceTracker::initialize() {
   LLVM_DEBUG(dbgs() << "*** DivergenceTracker::initialize(): " << function_->getName() << "\n");
 
@@ -1147,7 +1188,7 @@ void DivergenceTracker::initialize() {
   for (auto& GV : module->globals()) {
     if (GV.isThreadLocal()) {
       if (dv_nodes_.insert(&GV).second) {
-        LLVM_DEBUG(dbgs() << "*** divergent global variable: " << GV.getName() << "\n");
+        LLVM_DEBUG(dbgs() << "*** divergent global variable: " << GV << "\n");
       }
     }
   }
@@ -1157,12 +1198,114 @@ void DivergenceTracker::initialize() {
     for (auto& I : BB) {
       if (auto II = dyn_cast<IntrinsicInst>(&I)) {
         if (II->getIntrinsicID() == Intrinsic::riscv_vx_uniform) {
-          LLVM_DEBUG(dbgs() << "*** uniform intrinsic variable: " << I.getName() << "\n");
+          LLVM_DEBUG(dbgs() << "*** uniform intrinsic variable: " << I << "\n");
           uv_nodes_.insert(&I);
         }
       }
     }
   }
+
+  // Build our per‐alloca taint map:
+  this->buildAllocaTaints();
+
+  // Mark tainted loads as divergent
+  for (auto &BB : *function_) {
+    for (auto &I : BB) {
+      if (auto *LI = dyn_cast<LoadInst>(&I)) {
+        if (this->loadIsDivergent(LI))
+          dv_nodes_.insert(LI);
+      }
+    }
+  }
+}
+
+void DivergenceTracker::buildAllocaTaints() {
+  const DataLayout &DL = function_->getParent()->getDataLayout();
+
+  for (auto &BB : *function_) {
+    for (auto &I : BB) {
+      // Handle both CallInst and InvokeInst via CallBase
+      if (auto *CB = dyn_cast<CallBase>(&I)) {
+        // If this is an LLVM intrinsic, skip the purely‑metadata ones:
+        if (auto *II = dyn_cast<IntrinsicInst>(CB)) {
+          switch (II->getIntrinsicID()) {
+            case Intrinsic::lifetime_start:
+            case Intrinsic::lifetime_end:
+            case Intrinsic::var_annotation:
+            case Intrinsic::ptr_annotation:
+            case Intrinsic::invariant_start:
+            case Intrinsic::invariant_end:
+            case Intrinsic::dbg_declare:
+            case Intrinsic::dbg_value:
+              continue;
+            default:
+              break;
+          }
+        }
+
+        for (Value *ArgVal : CB->args()) {
+          if (!ArgVal->getType()->isPointerTy())
+            continue;
+
+          int64_t offset = 0;
+          Value *Current = ArgVal;
+          bool HasValidOffset = true;
+
+          // Trace GEPs and accumulate offset
+          while (auto *GEP = dyn_cast<GEPOperator>(Current)) {
+            APInt GEPOffset(DL.getIndexSizeInBits(GEP->getPointerAddressSpace()), 0);
+            if (!GEP->accumulateConstantOffset(DL, GEPOffset)) {
+              HasValidOffset = false;
+              break;
+            }
+            offset += GEPOffset.getSExtValue();
+            Current = GEP->getPointerOperand();
+          }
+
+          if (auto *AI = dyn_cast<AllocaInst>(Current)) {
+            auto ArgValPtr = cast<PointerType>(ArgVal->getType());
+            Type *PointeeType = ArgValPtr->getPointerTo();
+            uint64_t size = DL.getTypeAllocSize(PointeeType);
+            if (!HasValidOffset) {
+              // Mark entire alloca
+              size = DL.getTypeAllocSize(AI->getAllocatedType());
+              offset = 0;
+            }
+            taints_[AI].push_back({ &I, (uint64_t)offset, size });
+            LLVM_DEBUG(dbgs() << "*** Tainted Allocation " << *AI << " bytes [" << offset << "," << (offset+size) << ") via call: " << I << "\n");
+          }
+        }
+      }
+    }
+  }
+}
+
+bool DivergenceTracker::loadIsDivergent(const LoadInst *LI) {
+  const DataLayout &DL = function_->getParent()->getDataLayout();
+
+  // get the pointer and peel off casts/GEP with offset
+  auto Ptr = LI->getPointerOperand();
+  int64_t loadOffset;
+  auto basePtr = GetPointerBaseWithConstantOffset(Ptr, loadOffset, DL, true);
+  auto AI = dyn_cast<AllocaInst>(basePtr);
+  if (!AI)
+    return false;
+
+  uint64_t loadSize = DL.getTypeAllocSize(LI->getType());
+  auto &Entries = taints_[AI];
+
+  for (auto &E : Entries) {
+    // 1) check byte‐range overlap
+    if (loadOffset <  E.offset + E.size &&
+        loadOffset + loadSize >  E.offset) {
+      // 2) ensure the escaping call can actually reach this load
+      if (canReachInst(E.callInst, const_cast<LoadInst*>(LI))) {
+        LLVM_DEBUG(dbgs() << "*** Tained Divergent Load " << *LI << " overlaps taint ["<<E.offset<<","<<E.offset+E.size<<")" << " from call " << *E.callInst << "\n");
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 bool DivergenceTracker::isSourceOfDivergence(const Value *V) {
@@ -1176,7 +1319,7 @@ bool DivergenceTracker::isSourceOfDivergence(const Value *V) {
 
   // Mark annotated divergent variables
   if (dv_nodes_.count(V) != 0) {
-    LLVM_DEBUG(dbgs() << "*** divergent annotated variable: " << V->getName() << "\n");
+    LLVM_DEBUG(dbgs() << "*** divergent annotated variable: " << *V << "\n");
     return true;
   }
 
@@ -1186,29 +1329,30 @@ bool DivergenceTracker::isSourceOfDivergence(const Value *V) {
   // original value.
   if (isa<AtomicRMWInst>(V)
    || isa<AtomicCmpXchgInst>(V)) {
-    LLVM_DEBUG(dbgs() << "*** divergent atomic variable: " << V->getName() << "\n");
+    LLVM_DEBUG(dbgs() << "*** divergent atomic variable: " << *V << "\n");
     return true;
   }
 
   // We conservatively assume all function arguments to potentially be divergent
   if (isa<Argument>(V)) {
-    LLVM_DEBUG(dbgs() << "*** divergent function argument: " << V->getName() << "\n");
+    LLVM_DEBUG(dbgs() << "*** divergent function argument: " << *V << "\n");
     return true;
   }
 
   // We conservatively assume function return values are divergent
   if (isa<CallInst>(V)) {
-    LLVM_DEBUG(dbgs() << "*** divergent return variable: " << V->getName() << "\n");
+    LLVM_DEBUG(dbgs() << "*** divergent CallInst variable: " << *V << "\n");
     return true;
   }
 
   // We conservatively assume function return values are divergent
   if (isa<InvokeInst>(V)) {
-    LLVM_DEBUG(dbgs() << "*** divergent return variable: " << V->getName() << "\n");
+    LLVM_DEBUG(dbgs() << "*** divergent InvokeInst variable: " << *V << "\n");
     return true;
   }
 
-  // are are not certain about the rest!
+  // we are not certain about the rest!
+  LLVM_DEBUG(dbgs() << "*** unknown divergent state for variable: " << *V << "\n");
   return false;
 }
 
@@ -1219,11 +1363,12 @@ bool DivergenceTracker::isAlwaysUniform(const Value *V) {
 
   // Mark annotated uniform variables
   if (uv_nodes_.count(V) != 0) {
-    LLVM_DEBUG(dbgs() << "*** uniform annotated variable: " << V->getName() << "\n");
+    LLVM_DEBUG(dbgs() << "*** uniform annotated variable: " << *V << "\n");
     return true;
   }
 
-  // are are not certain about the rest!
+  // we not certain about the rest!
+  LLVM_DEBUG(dbgs() << "*** unknown uniform state for variable: " << *V << "\n");
   return false;
 }
 

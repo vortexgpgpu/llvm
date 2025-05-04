@@ -518,8 +518,8 @@ bool RISCVPassConfig::addPreISel() {
     addPass(createLoopSimplifyPass());
     addPass(createUnifyLoopExitsPass());
     addPass(createVortexBranchDivergence0Pass());
-    addPass(createStructurizeCFGPass(true, (VortexKernelSchedulerMode == 1)));
-    addPass(createVortexBranchDivergence1Pass(VortexKernelSchedulerMode));
+    addPass(createStructurizeCFGPass(true, (gVortexBranchDivergenceMode == 1)));
+    addPass(createVortexBranchDivergence1Pass(gVortexBranchDivergenceMode));
   }
   if (VortexKernelSchedulerMode != 0) {
     addPass(createVortexIntrinsicFuncLoweringPass());

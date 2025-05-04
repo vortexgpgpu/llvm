@@ -22,6 +22,17 @@ public:
 private:
   void initialize();
 
+  void buildAllocaTaints();
+
+  bool loadIsDivergent(const LoadInst *LI);
+
+  struct TaintAlloca {
+    const Instruction *callInst;
+    uint64_t     offset;
+    uint64_t     size;
+  };
+
+  DenseMap<const AllocaInst*, SmallVector<TaintAlloca,4>> taints_;
   DenseSet<const Value *> dv_nodes_;
   DenseSet<const Value *> uv_nodes_;
   const Function* function_;
