@@ -17281,14 +17281,24 @@ static MachineBasicBlock *emitFROUND(MachineInstr &MI, MachineBasicBlock *MBB,
   if (MI.getFlag(MachineInstr::MIFlag::NoFPExcept))
     MIB->setFlag(MachineInstr::MIFlag::NoFPExcept);
 
-  llvm::errs() << "error: unimplemented divergent codegen found!\n";
-  std::abort();
+  if (Subtarget.hasVendorXVortex() && gVortexBranchDivergenceMode != 0) {
+    Register CCReg, DVReg;
+    InsertVXSplit(&CCReg, &DVReg, RISCVCC::COND_NE, CmpReg, RISCV::X0,
+                  *MBB, MBB->end(), DL, TII);
 
+    BuildMI(MBB, DL, TII.getBrCond(RISCVCC::COND_NE))
+        .addReg(CCReg)
+        .addReg(RISCV::X0)
+        .addMBB(DoneMBB);
+
+    InsertVXJoin(DVReg, *DoneMBB, DoneMBB->begin(), DL, TII);
+  } else {
   // Insert branch.
   BuildMI(MBB, DL, TII.get(RISCV::BEQ))
       .addReg(CmpReg)
       .addReg(RISCV::X0)
       .addMBB(DoneMBB);
+  }
 
   CvtMBB->addSuccessor(DoneMBB);
 
