@@ -20,7 +20,7 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/IR/IRBuilder.h"
-
+#include "llvm/IR/DerivedTypes.h"        // for PointerType
 
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
@@ -28,8 +28,8 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 
-
 #include "llvm/Analysis/UniformityAnalysis.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/RegionInfo.h"
@@ -38,6 +38,8 @@
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/PostDominators.h"
+#include "llvm/Analysis/CallGraph.h"
+#include "llvm/Analysis/ValueTracking.h" // for GetPointerBaseWithConstantOffset
 
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
@@ -49,9 +51,8 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/IR/Instructions.h"        // for CallBase, AllocaInst, LoadInst
-#include "llvm/IR/DerivedTypes.h"        // for PointerType
-#include "llvm/Analysis/ValueTracking.h" // for GetPointerBaseWithConstantOffset
+
+#include "llvm/ADT/SCCIterator.h"
 
 #include <iostream>
 
@@ -60,10 +61,6 @@ using namespace llvm;
 using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "vortex-branch-divergence"
-
-#ifndef NDEBUG
-#define LLVM_DEBUG(x) do {x;} while (false)
-#endif
 
 namespace vortex {
 
@@ -278,8 +275,36 @@ public:
 
 ///////////////////////////////////////////////////////////////////////////////
 
-class VortexBranchDivergence1 : public FunctionPass {
+class VortexBranchDivergence1 : public ModulePass {
+public:
+
+  static char ID;
+
+  VortexBranchDivergence1(int divergenceMode = 0);
+
+  StringRef getPassName() const override;
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override;
+
+  bool runOnModule(Module &M) override;
+
 private:
+
+  void initialize(Module &M);
+
+  void analyzeFunction(Function &F);
+
+  bool isDivergentOutputPointer(Function &F, Argument &PtrArg, AliasAnalysis &AA, UniformityInfo &UA);
+
+  void processSetup(Function &F);
+
+  bool processFunction(Function &F);
+
+  void processBranches(LLVMContext* context, Function* function);
+
+  void processLoops(LLVMContext* context, Function* function);
+
+  bool isUniform(Instruction *T);
 
   using StackEntry = std::pair<BasicBlock *, Value *>;
   using StackVector = SmallVector<StackEntry, 16>;
@@ -311,26 +336,6 @@ private:
   Function *split_n_func_;
   Function *join_func_;
   Function *mov_func_;
-
-  void initialize(Function &F, const RISCVSubtarget &ST);
-
-  void processBranches(LLVMContext* context, Function* function);
-
-  void processLoops(LLVMContext* context, Function* function);
-
-  bool isUniform(Instruction *T);
-
-public:
-
-  static char ID;
-
-  VortexBranchDivergence1(int divergenceMode = 0);
-
-  StringRef getPassName() const override;
-
-  void getAnalysisUsage(AnalysisUsage &AU) const override;
-
-  bool runOnFunction(Function &F) override;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -361,7 +366,7 @@ FunctionPass *createVortexBranchDivergence0Pass() {
   return new VortexBranchDivergence0();
 }
 
-FunctionPass *createVortexBranchDivergence1Pass(int divergenceMode) {
+ModulePass *createVortexBranchDivergence1Pass(int divergenceMode) {
   return new VortexBranchDivergence1(divergenceMode);
 }
 
@@ -383,6 +388,8 @@ INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_PASS_DEPENDENCY(RegionInfoPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(CallGraphWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(PostDominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(UniformityInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TargetPassConfig)
@@ -418,9 +425,9 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
   const auto &TM = TPC.getTM<TargetMachine>();
   const auto &ST = TM.getSubtarget<RISCVSubtarget>(F);
 
-  LLVM_DEBUG(dbgs() << "*** Vortex Divergent Branch Handling Pass0 ***\n");
+  LLVM_DEBUG(dbgs() << "*** VX: Vortex Divergent Branch Handling Pass0 ***\n");
 
-  LLVM_DEBUG(dbgs() << "*** before Pass0 changes!\n" << F << "\n");
+  LLVM_DEBUG(dbgs() << "*** VX: before Pass0 changes!\n" << F << "\n");
 
   UA_ = &getAnalysis<UniformityInfoWrapperPass>().getUniformityInfo();
 
@@ -442,7 +449,7 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
 
     for (auto SI : selects) {
       auto BB = SI->getParent();
-      LLVM_DEBUG(dbgs() << "*** unswitching divergent select instruction: " << *SI << "\n");
+      LLVM_DEBUG(dbgs() << "*** VX: unswitching divergent select instruction: " << *SI << "\n");
       SplitBlockAndInsertIfThen(SI->getCondition(), SI, false);
       auto CondBr = cast<BranchInst>(BB->getTerminator());
       auto ThenBB = CondBr->getSuccessor(0);
@@ -474,7 +481,7 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
     }
 
     for (auto MMI : MMs) {
-      LLVM_DEBUG(dbgs() << "*** unswitching divergent min/max instruction: " << *MMI << "\n");
+      LLVM_DEBUG(dbgs() << "*** VX: unswitching divergent min/max instruction: " << *MMI << "\n");
       auto BB = MMI->getParent();
       auto ID = MMI->getIntrinsicID();
       auto LHS = MMI->getArgOperand(0);
@@ -603,7 +610,7 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
   }
 
   if (changed) {
-    LLVM_DEBUG(dbgs() << "*** after Pass0 changes!\n" << F << "\n");
+    LLVM_DEBUG(dbgs() << "*** VX: after Pass0 changes!\n" << F << "\n");
   }
 
   return changed;
@@ -614,7 +621,7 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
 char VortexBranchDivergence1::ID = 0;
 
 VortexBranchDivergence1::VortexBranchDivergence1(int divergenceMode)
-  : FunctionPass(ID)
+  : ModulePass(ID)
   , divergenceMode_(divergenceMode) {
   initializeVortexBranchDivergence1Pass(*PassRegistry::getPassRegistry());
 }
@@ -624,17 +631,18 @@ StringRef VortexBranchDivergence1::getPassName() const {
 }
 
 void VortexBranchDivergence1::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.addRequired<CallGraphWrapperPass>();
+  AU.addRequired<AAResultsWrapperPass>();
   AU.addRequired<LoopInfoWrapperPass>();
   AU.addRequired<RegionInfoPass>();
   AU.addRequired<DominatorTreeWrapperPass>();
   AU.addRequired<PostDominatorTreeWrapperPass>();
   AU.addRequired<UniformityInfoWrapperPass>();
   AU.addRequired<TargetPassConfig>();
-  FunctionPass::getAnalysisUsage(AU);
+  ModulePass::getAnalysisUsage(AU);
 }
 
-void VortexBranchDivergence1::initialize(Function &F, const RISCVSubtarget &ST) {
-  auto& M = *F.getParent();
+void VortexBranchDivergence1::initialize(Module &M) {
   auto& Context = M.getContext();
 
   auto sizeTSize = M.getDataLayout().getPointerSizeInBits();
@@ -668,33 +676,147 @@ void VortexBranchDivergence1::initialize(Function &F, const RISCVSubtarget &ST) 
     join_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_join_i32);
     mov_func_   = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_mov_i32);
   }
+}
 
-  RI_ = &getAnalysis<RegionInfoPass>().getRegionInfo();
-  LI_ = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-  UA_ = &getAnalysis<UniformityInfoWrapperPass>().getUniformityInfo();
-  DT_ = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  PDT_= &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
-
+void VortexBranchDivergence1::processSetup(Function &F) {
   namePrinter_.init(&F);
   replaceSuccessor_.init(&F);
+  UA_ = &getAnalysis<UniformityInfoWrapperPass>(F).getUniformityInfo();
+  RI_ = &getAnalysis<RegionInfoPass>(F).getRegionInfo();
+  LI_ = &getAnalysis<LoopInfoWrapperPass>(F).getLoopInfo();
+  DT_ = &getAnalysis<DominatorTreeWrapperPass>(F).getDomTree();
+  PDT_= &getAnalysis<PostDominatorTreeWrapperPass>(F).getPostDomTree();
+
   div_blocks_.clear();
   div_blocks_set_.clear();
   loops_.clear();
   loops_set_.clear();
 }
 
-bool VortexBranchDivergence1::runOnFunction(Function &F) {
-  const auto &TPC = getAnalysis<TargetPassConfig>();
-  const auto &TM = TPC.getTM<TargetMachine>();
-  const auto &ST = TM.getSubtarget<RISCVSubtarget>(F);
+bool VortexBranchDivergence1::runOnModule(Module &M) {
+  // initialize passes
+  this->initialize(M);
 
-  this->initialize(F, ST);
+  // Pass 1: analyze all functions
+  {
+    SmallVector<Function*, 32> FuncOrder;
+    CallGraph &CG = getAnalysis<CallGraphWrapperPass>().getCallGraph();
+    for (auto Icg = scc_begin(&CG), Ecg = scc_end(&CG); Icg != Ecg; ++Icg) {
+      for (auto &CGN : *Icg) {
+        auto F = CGN->getFunction();
+        if (!F || F->isDeclaration())
+          continue;
+        FuncOrder.push_back(F);
+      }
+    }
+    for (auto it = FuncOrder.rbegin(), ie = FuncOrder.rend(); it != ie; ++it) {
+      this->analyzeFunction(**it);
+    }
+  }
+
+  // Pass 2: process all functions
+  bool changed = false;
+  for (Function &F : M) {
+    if (F.isDeclaration())
+      continue;
+    this->processSetup(F);
+    changed |= this->processFunction(F);
+  }
+
+  DivergenceInfo::clear(&M);
+
+  return changed;
+}
+
+void VortexBranchDivergence1::analyzeFunction(Function &F) {
+  LLVM_DEBUG(dbgs() << "*** VX: analyze function: " << F.getName() << "\n");
+
+  auto dv_info = DivergenceInfo::get(&F);
+
+  auto &UA = getAnalysis<UniformityInfoWrapperPass>(F).getUniformityInfo();
+  auto &AA = getAnalysis<AAResultsWrapperPass>(F).getAAResults();
+
+  // Analyze return values
+  dv_info->uniform_ret = false;
+  for (auto &BB : F) {
+    auto RI = dyn_cast<ReturnInst>(BB.getTerminator());
+    if (!RI)
+      continue;
+    auto RetVal = RI->getReturnValue();
+    if (!RetVal)
+      continue;
+    bool isUniform = UA.isUniform(RetVal);
+    if (isUniform) {
+      LLVM_DEBUG(dbgs() << "*** VX: uniform return value: "
+                        << RetVal->getName() << " in function " << F.getName() << "\n");
+      dv_info->uniform_ret = true;
+    }
+  }
+
+  // Analyze pointer arguments
+  for (auto &Arg : F.args()) {
+    if (!Arg.getType()->isPointerTy())
+      continue;
+    bool isUniform = !this->isDivergentOutputPointer(F, Arg, AA, UA);
+    if (isUniform) {
+      dv_info->uniform_out_args.insert(&Arg);
+    }
+  }
+}
+
+bool VortexBranchDivergence1::isDivergentOutputPointer(
+    Function &F,
+    Argument &PtrArg,
+    AliasAnalysis &AA,
+    UniformityInfo &UA) {
+  auto &DL = F.getParent()->getDataLayout();
+  assert(PtrArg.getType()->isPointerTy());
+
+  auto PtrLoc = MemoryLocation(&PtrArg, LocationSize::beforeOrAfterPointer());
+  for (auto &BB : F) {
+    for (auto &I : BB) {
+      // Check for calls that might modify the pointer
+      if (auto CB = dyn_cast<CallBase>(&I)) {
+        if (auto Callee = CB->getCalledFunction()) {
+          if (!F.hasExternalLinkage()) {
+            for (auto &Arg : Callee->args()) {
+              LLVM_DEBUG(dbgs() << "*** VX: function call to " << Callee->getName()
+                                << " with argument: " << Arg.getName() << ": uniform=" << UA.isUniform(&Arg) << ", " << *CB << "\n");
+              DivergenceInfo::setUniformArg(Callee, &Arg, UA.isUniform(&Arg));
+            }
+          }
+        }
+        if (CB->mayWriteToMemory()
+         && AA.getModRefInfo(CB, PtrLoc) != ModRefInfo::NoModRef) {
+          LLVM_DEBUG(dbgs() << "*** VX: divergent call to pointer argument: "
+                            << PtrArg.getName() << " in " << F.getName() << ": " << *CB << "\n");
+          return true; // assume divergent
+        }
+      } else // Check for stores to the pointer argument
+      if (auto SI = dyn_cast<StoreInst>(&I)) {
+        MemoryLocation StoreLoc = MemoryLocation::get(SI);
+        if (AA.alias(PtrLoc, StoreLoc) != AliasResult::NoAlias) {
+          // Check for divergent store value
+          if (UA.isDivergent(SI->getValueOperand())) {
+            LLVM_DEBUG(dbgs() << "*** VX: divergent store to pointer argument: "
+                              << PtrArg.getName() << " in " << F.getName() << ": " << *SI << "\n");
+            return true; // assume divergent
+          }
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+bool VortexBranchDivergence1::processFunction(Function &F) {
+  LLVM_DEBUG(dbgs() << "*** VX: process function: " << F.getName() << "\n");
 
   auto &Context = F.getContext();
 
   LLVM_DEBUG(UA_->print(dbgs()));
-
-  LLVM_DEBUG(dbgs() << "*** Region info:\n");
+  LLVM_DEBUG(dbgs() << "*** VX: Region info:\n");
   LLVM_DEBUG(RI_->getTopLevelRegion()->dump());
   LLVM_DEBUG(dbgs() << "\n");
 
@@ -703,20 +825,19 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
   for (auto I = df_begin(&F.getEntryBlock()),
             E = df_end(&F.getEntryBlock()); I != E; ++I) {
     auto BB = *I;
-
     auto Br = dyn_cast<BranchInst>(BB->getTerminator());
     if (!Br)
       continue;
 
     // only process conditional branches
     if (Br->isUnconditional()) {
-      LLVM_DEBUG(dbgs() << "*** skip non-conditional branch: " << namePrinter_.BBName(BB) << "\n");
+      LLVM_DEBUG(dbgs() << "*** VX: skip non-conditional branch: " << namePrinter_.BBName(BB) << "\n");
       continue;
     }
 
     // only process divergent branches
     if (this->isUniform(Br)) {
-      LLVM_DEBUG(dbgs() << "*** skip uniform branch: " << namePrinter_.BBName(BB) << "\n");
+      LLVM_DEBUG(dbgs() << "*** VX: skip uniform branch: " << namePrinter_.BBName(BB) << "\n");
       continue;
     }
 
@@ -726,13 +847,13 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
       if (ipdom && loop->contains(ipdom)) {
         if (div_blocks_set_.insert(BB).second) {
           // add new branch to the list
-          LLVM_DEBUG(dbgs() << "*** divergent branch: " << namePrinter_.BBName(BB) << "\n");
+          LLVM_DEBUG(dbgs() << "*** VX: divergent branch: " << namePrinter_.BBName(BB) << "\n");
           div_blocks_.push_back(BB);
         }
       } else {
         if (loops_set_.insert(loop).second) {
           // add new loop to the list
-          LLVM_DEBUG(dbgs() << "*** divergent loop: " << namePrinter_.BBName(loop->getHeader()) << "\n");
+          LLVM_DEBUG(dbgs() << "*** VX: divergent loop: " << namePrinter_.BBName(loop->getHeader()) << "\n");
           loops_.push_back(loop);
         }
       }
@@ -755,7 +876,7 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
       }
       if (div_blocks_set_.insert(BB).second) {
         // add new branch to the list
-        LLVM_DEBUG(dbgs() << "*** divergent branch: " << namePrinter_.BBName(BB) << ", IPDOM=" << namePrinter_.BBName(ipdom) << "\n");
+        LLVM_DEBUG(dbgs() << "*** VX: divergent branch: " << namePrinter_.BBName(BB) << ", IPDOM=" << namePrinter_.BBName(ipdom) << "\n");
         div_blocks_.push_back(BB);
       }
     }
@@ -763,7 +884,7 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
 
   // apply transformation
   if (!loops_.empty() || !div_blocks_.empty()) {
-    LLVM_DEBUG(dbgs() << "*** before changes!\n" << F << "\n");
+    LLVM_DEBUG(dbgs() << "*** VX: before changes!\n" << F << "\n");
 
     // process the loop
     // This should be done first such that loop analysis is not tempered
@@ -782,7 +903,7 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
 
     changed = true;
 
-    LLVM_DEBUG(dbgs() << "*** after changes!\n" << F << "\n");
+    LLVM_DEBUG(dbgs() << "*** VX: after changes!\n" << F << "\n");
   }
 
   // remove uniform intrinsics
@@ -818,11 +939,11 @@ void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* funct
     auto preheader_br = dyn_cast<BranchInst>(preheader_term);
     assert(preheader_br);
 
-    LLVM_DEBUG(dbgs() << "*** process loop: " << namePrinter_.BBName(header) << "\n");
+    LLVM_DEBUG(dbgs() << "*** VX: process loop: " << namePrinter_.BBName(header) << "\n");
 
     // save current thread mask in preheader
     auto tmask = CallInst::Create(tmask_func_, "tmask", preheader_br);
-    LLVM_DEBUG(dbgs() << "*** backup thread mask '" << namePrinter_.ValueName(tmask) << "' before loop preheader branch: " << namePrinter_.BBName(preheader) << "\n");
+    LLVM_DEBUG(dbgs() << "*** VX: backup thread mask '" << namePrinter_.ValueName(tmask) << "' before loop preheader branch: " << namePrinter_.BBName(preheader) << "\n");
 
     // restore thread mask at loop exit blocks
     {
@@ -857,13 +978,13 @@ void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* funct
           // insert a custom mov instruction to prevent branch condition from being optimized away during codegen
           auto cond = CallInst::Create(mov_func_, cond_orig_i32, namePrinter_.ValueName(cond_orig_i32) + ".mov", branch);
 
-          LLVM_DEBUG(dbgs() << "*** insert thread predicate '" << namePrinter_.ValueName(cond) << "' before exiting block: " << namePrinter_.BBName(exiting_block) << "\n");
+          LLVM_DEBUG(dbgs() << "*** VX: insert thread predicate '" << namePrinter_.ValueName(cond) << "' before exiting block: " << namePrinter_.BBName(exiting_block) << "\n");
           if (!loop->contains(succ0)) {
             CallInst::Create(pred_n_func_, {cond, tmask}, "", branch);
           } else {
             CallInst::Create(pred_func_, {cond, tmask}, "", branch);
           }
-          LLVM_DEBUG(dbgs() << "*** after predicate change!\n" << function << "\n");
+          LLVM_DEBUG(dbgs() << "*** VX: after predicate change!\n" << function << "\n");
 
           // change branch condition
           auto cond_i1 = ir_builder.CreateICmpNE(cond, ConstantInt::get(SizeTTy_, 0), namePrinter_.ValueName(cond) + ".to.i1");
@@ -898,7 +1019,7 @@ void VortexBranchDivergence1::processBranches(LLVMContext* context, Function* fu
     assert(branch);
 #ifndef NDEBUG
     auto region = RI_->getRegionFor(block);
-    LLVM_DEBUG(dbgs() << "*** process branch " << namePrinter_.BBName(block) << ", region=" << region->getNameStr() << "\n");
+    LLVM_DEBUG(dbgs() << "*** VX: process branch " << namePrinter_.BBName(block) << ", region=" << region->getNameStr() << "\n");
 #endif
     // insert a mov instruction before split
     IRBuilder<> ir_builder(branch);
@@ -908,7 +1029,7 @@ void VortexBranchDivergence1::processBranches(LLVMContext* context, Function* fu
     auto cond = CallInst::Create(mov_func_, cond_orig_i32, namePrinter_.ValueName(cond_orig_i32) + ".mov", branch);
 
     // insert split instruction before divergent branch
-    LLVM_DEBUG(dbgs() << "*** insert split '" << namePrinter_.ValueName(cond) << "' before " << namePrinter_.BBName(block) << "'s branch.\n");
+    LLVM_DEBUG(dbgs() << "*** VX: insert split '" << namePrinter_.ValueName(cond) << "' before " << namePrinter_.BBName(block) << "'s branch.\n");
     auto stack_ptr = CallInst::Create(split_func_, cond, "", branch);
 
     // change branch condition
@@ -917,7 +1038,7 @@ void VortexBranchDivergence1::processBranches(LLVMContext* context, Function* fu
 
     // insert a join stub block before ipdom
     auto stub = BasicBlock::Create(*context, "join_stub", function, ipdom);
-    LLVM_DEBUG(dbgs() << "*** insert join stub '" << stub->getName() << "' before " << namePrinter_.BBName(ipdom) << "\n");
+    LLVM_DEBUG(dbgs() << "*** VX: insert join stub '" << stub->getName() << "' before " << namePrinter_.BBName(ipdom) << "\n");
     auto stub_br = BranchInst::Create(ipdom, stub);
     CallInst::Create(join_func_, stack_ptr, "", stub_br);
     std::vector<BasicBlock*> preds;
@@ -1011,7 +1132,7 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
             }
             MII_join->eraseFromParent();
             MI.eraseFromParent();
-            LLVM_DEBUG(dbgs() << "*** Vortex: cleanup removed branches!\n");
+            LLVM_DEBUG(dbgs() << "*** VX: Vortex: cleanup removed branches!\n");
             Changed = true;
             continue;
           }
@@ -1040,7 +1161,7 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
             MI.setDesc(TII->get(RISCV::VX_SPLIT));
             break;
           }
-          LLVM_DEBUG(dbgs() << "*** Vortex: fixed predicate opcode!\n");
+          LLVM_DEBUG(dbgs() << "*** VX: Vortex: fixed predicate opcode!\n");
           Changed = true;
           continue;
         }
@@ -1050,7 +1171,7 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
   }
 
   if (Changed) {
-    LLVM_DEBUG(dbgs() << "*** after changes!\n" << MF.getName() << "\n");
+    LLVM_DEBUG(dbgs() << "*** VX: after changes!\n" << MF.getName() << "\n");
     LLVM_DEBUG(MF.dump(););
   }
 
@@ -1075,7 +1196,7 @@ PreservedAnalyses UniformAnnotationPass::run(Function &F, FunctionAnalysisManage
     for (auto& I : BB) {
       // process metadata-based annotations
       if (I.getMetadata("vortex.uniform") != nullptr) {
-        LLVM_DEBUG(dbgs() << "*** found metadata annotation: " << I << "\n");
+        LLVM_DEBUG(dbgs() << "*** VX: found metadata annotation: " << I << "\n");
         uniformInsts.push_back({&I, false}); // false = metadata annotation
         continue;
       }
@@ -1087,7 +1208,7 @@ PreservedAnalyses UniformAnnotationPass::run(Function &F, FunctionAnalysisManage
           if (cda->getAsCString() == "vortex.uniform") {
             auto AnnotatedValue = dyn_cast<AllocaInst>(II->getOperand(0));
             if (AnnotatedValue) {
-              LLVM_DEBUG(dbgs() << "*** found var_annotation: " << *AnnotatedValue << "\n");
+              LLVM_DEBUG(dbgs() << "*** VX: found var_annotation: " << *AnnotatedValue << "\n");
               uniformInsts.push_back({AnnotatedValue, true}); // true = var_annotation annotation
             }
             continue;
@@ -1145,14 +1266,68 @@ PreservedAnalyses UniformAnnotationPass::run(Function &F, FunctionAnalysisManage
 
 ///////////////////////////////////////////////////////////////////////////////
 
-DivergenceTracker::DivergenceTracker(const Function &function)
-  : function_(&function)
-  , initialized_(false)
-{}
+llvm::DenseMap<const llvm::Function*, dv_info_t> DivergenceInfo::dv_infos_;
+llvm::sys::Mutex DivergenceInfo::mutex_;
+
+dv_info_t* DivergenceInfo::get(const llvm::Function* F) {
+  llvm::sys::ScopedLock lock(mutex_);
+  auto &x = dv_infos_[F];
+  return &x;
+}
+
+void DivergenceInfo::setUniformArg(const llvm::Function* F, const llvm::Argument* Arg, bool is_uniform) {
+  llvm::sys::ScopedLock lock(mutex_);
+  if (!F || F->isDeclaration())
+    return;
+  auto it = dv_infos_.find(F);
+  if (it != dv_infos_.end()) {
+    auto itArg = it->second.uniform_in_args.find(Arg);
+    if (itArg != it->second.uniform_in_args.end()) {
+      // remove existing entry if divergent
+      if (!is_uniform) {
+        it->second.uniform_in_args.erase(itArg);
+      }
+    } else {
+      if (is_uniform) {
+        it->second.uniform_in_args.insert(Arg);
+      }
+    }
+  } else {
+    // create new entry if not found
+    if (is_uniform) {
+      dv_info_t& dv_info = dv_infos_[F];
+      dv_info.uniform_in_args.insert(Arg);
+    }
+  }
+}
+
+bool DivergenceInfo::is_uniform_Call(const llvm::Function* F) {
+  llvm::sys::ScopedLock lock(mutex_);
+  if (!F || F->isDeclaration())
+    return false;
+  auto it = dv_infos_.find(F);
+  if (it != dv_infos_.end()) {
+    return it->second.uniform_ret;
+  }
+  return false; // not found
+}
+
+void DivergenceInfo::clear(const llvm::Module* M) {
+  llvm::sys::ScopedLock lock(mutex_);
+  // Clear all divergence info for the module
+  for (auto it = dv_infos_.begin(); it != dv_infos_.end();) {
+    auto itc = it++;
+    if (itc->first->getParent() == M) {
+      dv_infos_.erase(itc);
+    }
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 // Return true if 'From' can reach 'To' in the *instruction‑level* CFG
 // (i.e. successor = next inst in same BB, or first inst of successor BB).
-bool canReachInst(const Instruction *From, const Instruction *To) {
+static bool canReachInst(const Instruction *From, const Instruction *To) {
   SmallPtrSet<const Instruction*, 8> visited;
   SmallVector<const Instruction*, 8> worklist{From};
 
@@ -1177,18 +1352,25 @@ bool canReachInst(const Instruction *From, const Instruction *To) {
   return false;
 }
 
-void DivergenceTracker::initialize() {
-  LLVM_DEBUG(dbgs() << "*** DivergenceTracker::initialize(): " << function_->getName() << "\n");
+DivergenceTracker::DivergenceTracker(const Function &F)
+: function_(&F)
+, initialized_(false) {
+  // Note: defer initialization until use because this constructor is also invoked,
+  // when divergence analysis is not needed as part of the RISCVTTIImpl's contruction.
+}
 
-  initialized_ = true;
+void DivergenceTracker::initialize() {
+  LLVM_DEBUG(dbgs() << "*** VX: DivergenceTracker::initialize(): " << function_->getName() << "\n");
 
   auto module = function_->getParent();
+  dv_info_ = DivergenceInfo::get(function_);
+  external_linkage_ = function_->hasExternalLinkage();
 
   // Mark all TLS globals as divergent
   for (auto& GV : module->globals()) {
     if (GV.isThreadLocal()) {
       if (dv_nodes_.insert(&GV).second) {
-        LLVM_DEBUG(dbgs() << "*** divergent global variable: " << GV << "\n");
+        LLVM_DEBUG(dbgs() << "*** VX: divergent global variable: " << GV << "\n");
       }
     }
   }
@@ -1198,7 +1380,7 @@ void DivergenceTracker::initialize() {
     for (auto& I : BB) {
       if (auto II = dyn_cast<IntrinsicInst>(&I)) {
         if (II->getIntrinsicID() == Intrinsic::riscv_vx_uniform) {
-          LLVM_DEBUG(dbgs() << "*** uniform intrinsic variable: " << I << "\n");
+          LLVM_DEBUG(dbgs() << "*** VX: uniform intrinsic variable: " << I << "\n");
           uv_nodes_.insert(&I);
         }
       }
@@ -1206,23 +1388,26 @@ void DivergenceTracker::initialize() {
   }
 
   // Build our per‐alloca taint map:
-  this->buildAllocaTaints();
+  this->buildAllocaTaints(*function_);
 
   // Mark tainted loads as divergent
   for (auto &BB : *function_) {
     for (auto &I : BB) {
       if (auto *LI = dyn_cast<LoadInst>(&I)) {
-        if (this->loadIsDivergent(LI))
+        if (this->loadIsDivergent(*function_, LI))
           dv_nodes_.insert(LI);
       }
     }
   }
+
+  // tracker is initialized
+  initialized_ = true;
 }
 
-void DivergenceTracker::buildAllocaTaints() {
-  const DataLayout &DL = function_->getParent()->getDataLayout();
+void DivergenceTracker::buildAllocaTaints(const Function &F) {
+  const DataLayout &DL = F.getParent()->getDataLayout();
 
-  for (auto &BB : *function_) {
+  for (auto &BB : F) {
     for (auto &I : BB) {
       // Handle both CallInst and InvokeInst via CallBase
       if (auto *CB = dyn_cast<CallBase>(&I)) {
@@ -1275,7 +1460,7 @@ void DivergenceTracker::buildAllocaTaints() {
               offset = 0;
             }
             taints_[AI].push_back({ &I, (uint64_t)offset, taintSize });
-            LLVM_DEBUG(dbgs() << "*** Tainted Allocation " << *AI << ", offset [" << offset << ":" << (offset+taintSize) << "] via call: " << I << "\n");
+            LLVM_DEBUG(dbgs() << "*** VX: Tainted Allocation " << *AI << ", offset [" << offset << ":" << (offset+taintSize) << "] via call: " << I << "\n");
           }
         }
       }
@@ -1283,8 +1468,8 @@ void DivergenceTracker::buildAllocaTaints() {
   }
 }
 
-bool DivergenceTracker::loadIsDivergent(const LoadInst *LI) {
-  const DataLayout &DL = function_->getParent()->getDataLayout();
+bool DivergenceTracker::loadIsDivergent(const Function &F, const LoadInst *LI) {
+  const DataLayout &DL = F.getParent()->getDataLayout();
 
   // get the pointer and peel off casts/GEP with offset
   auto Ptr = LI->getPointerOperand();
@@ -1299,11 +1484,11 @@ bool DivergenceTracker::loadIsDivergent(const LoadInst *LI) {
 
   for (auto &E : Entries) {
     // 1) check byte‐range overlap
-    if (loadOffset <  E.offset + E.size &&
-        loadOffset + loadSize >  E.offset) {
+    if (loadOffset < int64_t(E.offset + E.size)
+     && (loadOffset + loadSize) > E.offset) {
       // 2) ensure the escaping call can actually reach this load
       if (canReachInst(E.callInst, const_cast<LoadInst*>(LI))) {
-        LLVM_DEBUG(dbgs() << "*** Tained Divergent Load " << *LI << " overlaps taint ["<<E.offset<<","<<E.offset+E.size<<")" << " from call " << *E.callInst << "\n");
+        LLVM_DEBUG(dbgs() << "*** VX: Tained Divergent Load " << *LI << " overlaps taint ["<<E.offset<<","<<E.offset+E.size<<")" << " from call " << *E.callInst << "\n");
         return true;
       }
     }
@@ -1316,13 +1501,9 @@ bool DivergenceTracker::isSourceOfDivergence(const Value *V) {
     this->initialize();
   }
 
-  // check if node always uniform
-  if (this->isAlwaysUniform(V))
-    return false;
-
   // Mark annotated divergent variables
   if (dv_nodes_.count(V) != 0) {
-    LLVM_DEBUG(dbgs() << "*** divergent annotated variable: " << *V << "\n");
+    LLVM_DEBUG(dbgs() << "*** VX: divergent annotated variable: " << *V << "\n");
     return true;
   }
 
@@ -1332,30 +1513,43 @@ bool DivergenceTracker::isSourceOfDivergence(const Value *V) {
   // original value.
   if (isa<AtomicRMWInst>(V)
    || isa<AtomicCmpXchgInst>(V)) {
-    LLVM_DEBUG(dbgs() << "*** divergent atomic variable: " << *V << "\n");
+    LLVM_DEBUG(dbgs() << "*** VX: divergent atomic variable: " << *V << "\n");
     return true;
   }
 
   // We conservatively assume all function arguments to potentially be divergent
+  // except when they are marked as uniform.
   if (isa<Argument>(V)) {
-    LLVM_DEBUG(dbgs() << "*** divergent function argument: " << *V << "\n");
-    return true;
+    auto Arg = dyn_cast<Argument>(V);
+    if (dv_info_->uniform_in_args.count(Arg) != 0) {
+      LLVM_DEBUG(dbgs() << "*** VX: uniform input argument: " << *V << "\n");
+      return false; // uniform
+    } else {
+      LLVM_DEBUG(dbgs() << "*** VX: divergent function argument: " << *V << "\n");
+      return true; // divergent
+    }
   }
 
   // We conservatively assume function return values are divergent
-  if (isa<CallInst>(V)) {
-    LLVM_DEBUG(dbgs() << "*** divergent CallInst variable: " << *V << "\n");
-    return true;
-  }
-
-  // We conservatively assume function return values are divergent
-  if (isa<InvokeInst>(V)) {
-    LLVM_DEBUG(dbgs() << "*** divergent InvokeInst variable: " << *V << "\n");
-    return true;
+  // except when they are marked as uniform.
+  if (isa<CallBase>(V)) {
+    auto CB = dyn_cast<CallBase>(V);
+    if (auto Callee = CB->getCalledFunction()) {
+      bool is_uniform = DivergenceInfo::is_uniform_Call(Callee);
+      if (is_uniform) {
+        LLVM_DEBUG(dbgs() << "*** VX: uniform function Call: " << *V << "\n");
+        return false; // unknown
+      }
+      LLVM_DEBUG(dbgs() << "*** VX: divergent function Call: " << *V << "\n");
+      return true; // assume divergent
+    } else {
+      LLVM_DEBUG(dbgs() << "*** VX: divergent indirect Call: " << *V << "\n");
+      return true; // assume divergent
+    }
   }
 
   // we are not certain about the rest!
-  LLVM_DEBUG(dbgs() << "*** unknown divergent state for variable: " << *V << "\n");
+  LLVM_DEBUG(dbgs() << "*** VX: unknown divergent variable: " << *V << "\n");
   return false;
 }
 
@@ -1366,12 +1560,56 @@ bool DivergenceTracker::isAlwaysUniform(const Value *V) {
 
   // Mark annotated uniform variables
   if (uv_nodes_.count(V) != 0) {
-    LLVM_DEBUG(dbgs() << "*** uniform annotated variable: " << *V << "\n");
+    LLVM_DEBUG(dbgs() << "*** VX: uniform annotated variable: " << *V << "\n");
     return true;
   }
 
+  // All machine CSRs and some special user CSRs are always uniform
+  if (auto CI = dyn_cast<CallInst>(V)) {
+    if (CI->isInlineAsm()) {
+      auto IA = cast<InlineAsm>(CI->getCalledOperand());
+      StringRef AsmStr = IA->getAsmString();
+      if (!(AsmStr.contains('\n') || AsmStr.contains('\n'))) { // skip multi-line asm
+        AsmStr = AsmStr.ltrim(); // skip leading spaces
+        if ((AsmStr.starts_with("csrr ")
+          || AsmStr.starts_with("csrw ")
+          || AsmStr.starts_with("csrwi ")
+          || AsmStr.starts_with("csrs ")
+          || AsmStr.starts_with("csrsi ")
+          || AsmStr.starts_with("csrc ")
+          || AsmStr.starts_with("csrci ")
+          || AsmStr.starts_with("csrrw ")
+          || AsmStr.starts_with("csrrwi ")
+          || AsmStr.starts_with("csrrs ")
+          || AsmStr.starts_with("csrrsi ")
+          || AsmStr.starts_with("csrrc ")
+          || AsmStr.starts_with("csrrci "))) {
+          auto Addr = CI->getArgOperand(0);
+          if (auto *C = dyn_cast<ConstantInt>(Addr)) {
+            uint64_t Addr = C->getZExtValue();
+            // extract RISC-V CSR privileged level
+            uint32_t level = (Addr >> 8) & 0x3;
+            // Machine CSRs are always uniform
+            if (level == 0x3) {
+              LLVM_DEBUG(dbgs() << "*** VX: Uniform machine CSR: Add=" << format_hex(Addr, 0) << ", " << *V << "\n");
+              return true;
+            }
+            if (Addr == 0xCC1    // warp_id
+             || Addr == 0xCC2    // core_id
+             || Addr == 0xCC3    // active warps
+             || Addr == 0xCC4) { // active threads
+              // special user CSRs are also uniform
+              LLVM_DEBUG(dbgs() << "*** VX: Uniform special user CSR: Add=" << format_hex(Addr, 0) << ", " << *V << "\n");
+              return true;
+            }
+          }
+        }
+      }
+    }
+  }
+
   // we not certain about the rest!
-  LLVM_DEBUG(dbgs() << "*** unknown uniform state for variable: " << *V << "\n");
+  LLVM_DEBUG(dbgs() << "*** VX: unknown uniform variable: " << *V << "\n");
   return false;
 }
 

@@ -49,10 +49,6 @@ using namespace llvm;
 
 #define DEBUG_TYPE "riscv-lower"
 
-#ifndef NDEBUG
-#define LLVM_DEBUG(x) do {x;} while (false)
-#endif
-
 STATISTIC(NumTailCalls, "Number of tail calls");
 
 extern int gVortexBranchDivergenceMode;

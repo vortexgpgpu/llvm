@@ -60,8 +60,9 @@ class RISCVTTIImpl : public BasicTTIImplBase<RISCVTTIImpl> {
                                           TTI::TargetCostKind CostKind);
 public:
   explicit RISCVTTIImpl(const RISCVTargetMachine *TM, const Function &F)
-      : BaseT(TM, F.getParent()->getDataLayout()), ST(TM->getSubtargetImpl(F)),
-        TLI(ST->getTargetLowering())
+      : BaseT(TM, F.getParent()->getDataLayout())
+      , ST(TM->getSubtargetImpl(F))
+      , TLI(ST->getTargetLowering())
       , divergence_tracker_(F)
       , hasBranchDivergence_(ST->hasVendorXVortex()) {}
 
@@ -373,6 +374,10 @@ public:
 
   bool shouldFoldTerminatingConditionAfterLSR() const {
     return true;
+  }
+
+  auto& divergence_tracker() {
+    return divergence_tracker_;
   }
 };
 
