@@ -12,18 +12,67 @@ struct UniformAnnotationPass : PassInfoMixin<UniformAnnotationPass> {
 };
 
 struct dv_info_t {
-  DenseSet<const Argument*> uniform_in_args;
-  DenseSet<const Argument*> uniform_out_args;
-  bool uniform_ret = false;
+public:
+  bool isUniformRet() const {
+    return uniform_ret_;
+  }
+
+  bool isUniformInArg(const Argument* Arg) const {
+    return uniform_in_args_.count(Arg) != 0;
+  }
+
+  bool isUniformOutArg(const Argument* Arg) const {
+    return uniform_out_args_.count(Arg) != 0;
+  }
+
+  bool isDivergentInstr(const Value* Instr) const {
+    return divergent_instrs_.count(Instr) != 0;
+  }
+
+  bool setUniformRet(bool is_uniform) {
+    if (uniform_ret_ != is_uniform) {
+      uniform_ret_ = is_uniform;
+      return true; // changed
+    }
+    return false; // not changed
+  }
+
+  bool setUniformInArg(const Argument* Arg, bool is_uniform) {
+    if (is_uniform) {
+      return uniform_in_args_.insert(Arg).second; // true if inserted
+    } else {
+      return uniform_in_args_.erase(Arg); // true if erased
+    }
+  }
+
+  bool setUniformOutArg(const Argument* Arg, bool is_uniform) {
+    if (is_uniform) {
+      return uniform_out_args_.insert(Arg).second; // true if inserted
+    } else {
+      return uniform_out_args_.erase(Arg); // true if erased
+    }
+  }
+
+  bool setDivergentInstr(const Value* Instr) {
+    return divergent_instrs_.insert(Instr).second; // true if inserted
+  }
+
+private:
+  DenseSet<const Argument*> uniform_in_args_;
+  DenseSet<const Argument*> uniform_out_args_;
+  DenseSet<const Value*>    divergent_instrs_;
+  bool uniform_ret_ = false;
 };
 
 class DivergenceInfo {
 public:
   static dv_info_t* get(const llvm::Function* F);
 
-  static void setUniformArg(const llvm::Function* F, const llvm::Argument* Arg, bool is_uniform);
+  static bool setUniformInArg(const llvm::Function* F, const llvm::Argument* Arg, bool is_uniform);
 
-  static bool is_uniform_Call(const llvm::Function* F);
+  static bool isUniformRet(const llvm::Function* F);
+
+  static bool isUniformOutArg(const llvm::Function* F, const llvm::Argument* Arg);
 
   static void clear(const llvm::Module* M);
 
@@ -43,23 +92,9 @@ public:
 private:
   void initialize();
 
-  void buildAllocaTaints(const Function &F);
-
-  bool loadIsDivergent(const Function &F, const LoadInst *LI);
-
-  struct TaintAlloca {
-    const Instruction* callInst;
-    uint64_t offset;
-    uint64_t size;
-  };
-
-  DenseMap<const AllocaInst*, SmallVector<TaintAlloca,4>> taints_;
-  DenseSet<const Value*> dv_nodes_;
-  DenseSet<const Value*> uv_nodes_;
+  dv_info_t* dv_info_;
   const Function* function_;
   bool initialized_;
-  dv_info_t* dv_info_;
-  bool external_linkage_;
 };
 
 }

@@ -128,8 +128,10 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   initializeRISCVPostLegalizerCombinerPass(*PR);
   initializeKCFIPass(*PR);
   if (VortexBranchDivergenceMode != 0) {
+    initializeVortexDivergenceAnalysis0Pass(*PR);
     initializeVortexBranchDivergence0Pass(*PR);
     initializeVortexBranchDivergence1Pass(*PR);
+    initializeVortexDivergenceAnalysis1Pass(*PR);
     initializeVortexBranchDivergence2Pass(*PR);
   }
   if (VortexKernelSchedulerMode != 0) {
@@ -483,8 +485,6 @@ bool RISCVPassConfig::addRegAssignAndRewriteOptimized() {
 }
 
 void RISCVPassConfig::addIRPasses() {
-  //insertPass(Annotation2MetadataPass::ID(), &VortexBranchDivergence0ID);
-
   addPass(createAtomicExpandPass());
 
   if (getOptLevel() != CodeGenOptLevel::None) {
@@ -517,9 +517,12 @@ bool RISCVPassConfig::addPreISel() {
     addPass(createCFGSimplificationPass());
     addPass(createLoopSimplifyPass());
     addPass(createUnifyLoopExitsPass());
+    addPass(createVortexDivergenceAnalysis0Pass());
     addPass(createVortexBranchDivergence0Pass());
     addPass(createStructurizeCFGPass(true, (gVortexBranchDivergenceMode == 1)));
+    addPass(createVortexDivergenceAnalysis0Pass());
     addPass(createVortexBranchDivergence1Pass(gVortexBranchDivergenceMode));
+    addPass(createVortexDivergenceAnalysis1Pass());
   }
   if (VortexKernelSchedulerMode != 0) {
     addPass(createVortexIntrinsicFuncLoweringPass());

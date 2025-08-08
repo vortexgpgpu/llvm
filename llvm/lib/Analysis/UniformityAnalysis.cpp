@@ -31,15 +31,19 @@ bool llvm::GenericUniformityAnalysisImpl<SSAContext>::markDefsDivergent(
 }
 
 template <> void llvm::GenericUniformityAnalysisImpl<SSAContext>::initialize() {
-  for (auto &I : instructions(F)) {
-    if (TTI->isSourceOfDivergence(&I))
-      markDivergent(I);
-    else if (TTI->isAlwaysUniform(&I))
-      addUniformOverride(I);
-  }
+  // analyze function arguments first
   for (auto &Arg : F.args()) {
     if (TTI->isSourceOfDivergence(&Arg)) {
       markDivergent(&Arg);
+    }
+  }
+  // then analyze the function body
+  for (auto &I : instructions(F)) {
+    if (TTI->isAlwaysUniform(&I)) {
+      addUniformOverride(I);
+    } else
+    if (TTI->isSourceOfDivergence(&I)) {
+      markDivergent(I);
     }
   }
 }

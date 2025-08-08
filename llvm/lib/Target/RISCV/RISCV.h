@@ -94,10 +94,16 @@ void initializeRISCVPostLegalizerCombinerPass(PassRegistry &);
 FunctionPass *createRISCVO0PreLegalizerCombiner();
 void initializeRISCVO0PreLegalizerCombinerPass(PassRegistry &);
 
+ModulePass *createVortexDivergenceAnalysis0Pass();
+void initializeVortexDivergenceAnalysis0Pass(PassRegistry&);
+
+ModulePass *createVortexDivergenceAnalysis1Pass();
+void initializeVortexDivergenceAnalysis1Pass(PassRegistry&);
+
 FunctionPass *createVortexBranchDivergence0Pass();
 void initializeVortexBranchDivergence0Pass(PassRegistry&);
 
-ModulePass *createVortexBranchDivergence1Pass(int divergenceMode = 0);
+FunctionPass *createVortexBranchDivergence1Pass(int divergenceMode = 0);
 void initializeVortexBranchDivergence1Pass(PassRegistry&);
 
 FunctionPass *createVortexBranchDivergence2Pass(int PassMode);
