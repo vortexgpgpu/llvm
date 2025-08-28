@@ -58,6 +58,7 @@ add_llvm_target(RISCVCodeGen
   RISCVTargetTransformInfo.cpp
   VortexBranchDivergence.cpp
   VortexIntrinsicFunc.cpp
+  VortexReconstructionPass.cpp
   GISel/RISCVCallLowering.cpp
   GISel/RISCVInstructionSelector.cpp
   GISel/RISCVLegalizerInfo.cpp

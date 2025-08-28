@@ -57,6 +57,11 @@ static cl::opt<int> VortexBranchDivergenceMode(
   cl::init(1));
 int gVortexBranchDivergenceMode = 0;
 
+static cl::opt<int> VortexBranchDivergenceOptLevel(
+    "vortex-branch-opt",
+    cl::desc("Set Vortex Branch Divergence Optimization Level"), cl::init(0));
+int gVortexBranchDivergenceOptLevel = 8;
+
 static cl::opt<int> VortexKernelSchedulerMode(
   "vortex-kernel-scheduler",
   cl::desc("Set Vortex Kernel Scheduler Mode"),
@@ -130,6 +135,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   if (VortexBranchDivergenceMode != 0) {
     initializeVortexDivergenceAnalysis0Pass(*PR);
     initializeVortexBranchDivergence0Pass(*PR);
+    initializeVortexReconstructionPass(*PR);
     initializeVortexBranchDivergence1Pass(*PR);
     initializeVortexDivergenceAnalysis1Pass(*PR);
     initializeVortexBranchDivergence2Pass(*PR);
@@ -198,6 +204,17 @@ RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
    && VortexBranchDivergenceMode != 0) {
    gVortexBranchDivergenceMode = VortexBranchDivergenceMode;
    setRequiresStructuredCFG(true);
+  }
+  // SJ: Temp for fast testing
+  if (FS.contains("+vortex")) {
+    if (std::getenv("VORTEX_DIVERGENCE_OPT_LEVEL") != nullptr)
+      gVortexBranchDivergenceOptLevel =
+          std::stoi(std::string(std::getenv("VORTEX_DIVERGENCE_OPT_LEVEL")));
+    if (gVortexBranchDivergenceOptLevel > 10 ||
+        gVortexBranchDivergenceOptLevel < 1)
+      gVortexBranchDivergenceMode = 8;
+    dbgs() << "LLVM : Mode " << gVortexBranchDivergenceMode << ", Opt "
+           << gVortexBranchDivergenceOptLevel << "\n";
   }
 
   if (TT.isOSFuchsia() && !TT.isArch64Bit())
@@ -304,14 +321,13 @@ bool RISCVTargetMachine::isNoopAddrSpaceCast(unsigned SrcAS,
 
 void RISCVTargetMachine::registerPassBuilderCallbacks(
     PassBuilder &PB, bool PopulateClassToPassNames) {
-  if (gVortexBranchDivergenceMode != 0) {
+  if (gVortexBranchDivergenceMode != 0 && gVortexBranchDivergenceOptLevel >= 2) {
     PB.registerPipelineStartEPCallback(
       [this](ModulePassManager &PM, OptimizationLevel Level) {
         FunctionPassManager FPM;
         FPM.addPass(vortex::UniformAnnotationPass());
         PM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
-
   }
 }
 
@@ -516,13 +532,28 @@ bool RISCVPassConfig::addPreISel() {
     addPass(createLowerSwitchPass());
     addPass(createCFGSimplificationPass());
     addPass(createLoopSimplifyPass());
+
+    if (gVortexBranchDivergenceOptLevel >= 9){ // SJ : for testing
+      addPass(createVortexReconstructionPass());
+      addPass(createCFGSimplificationPass());
+      addPass(createLoopSimplifyPass());
+    }
+
     addPass(createUnifyLoopExitsPass());
-    addPass(createVortexDivergenceAnalysis0Pass());
+    if (gVortexBranchDivergenceOptLevel >= 3) // SJ : for testing
+      addPass(createVortexDivergenceAnalysis0Pass());
+
     addPass(createVortexBranchDivergence0Pass());
+
     addPass(createStructurizeCFGPass(true, (gVortexBranchDivergenceMode == 1)));
-    addPass(createVortexDivergenceAnalysis0Pass());
+
+    if (gVortexBranchDivergenceOptLevel >= 3) // SJ : for testing
+      addPass(createVortexDivergenceAnalysis0Pass());
+  
     addPass(createVortexBranchDivergence1Pass(gVortexBranchDivergenceMode));
-    addPass(createVortexDivergenceAnalysis1Pass());
+
+    if (gVortexBranchDivergenceOptLevel >= 3) // SJ : for testing
+      addPass(createVortexDivergenceAnalysis1Pass());
   }
   if (VortexKernelSchedulerMode != 0) {
     addPass(createVortexIntrinsicFuncLoweringPass());
