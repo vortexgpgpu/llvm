@@ -210,6 +210,10 @@ bool VortexReconstruction::runOnFunction(Function &F) {
 
     LLVM_DEBUG(dbgs() << "ReconstructionPass: target Node: " << Node_name
                       << "\n");
+    for( auto Pred : Preds ){
+      auto Pred_name = std::string(Pred->getName().data());
+      LLVM_DEBUG(dbgs() << "  CDG Pred: " << Pred_name << "\n");
+    }
 
     if (Preds.size() < 2){
       LLVM_DEBUG(dbgs() << "ReconstructionPass: skip: less than 2 preds\n");
