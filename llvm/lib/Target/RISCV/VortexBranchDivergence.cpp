@@ -1756,7 +1756,7 @@ bool DivergenceTracker::isAlwaysUniform(const Value *V) {
   if (std::getenv("VORTEX_DIVERGENCE_OPT_LEVEL") != nullptr)
     gVortexBranchDivergenceOptLevel =
       std::stoi(std::string(std::getenv("VORTEX_DIVERGENCE_OPT_LEVEL")));
-  if ( gVortexBranchDivergenceOptLevel >= 0 && gVortexBranchDivergenceOptLevel < 3)
+  if ( gVortexBranchDivergenceOptLevel == 1)
   {
     LLVM_DEBUG(dbgs() << "*** VX: Skip isAlwaysUniform func of divergence tracker (opt level 0-2)\n");
     return false;

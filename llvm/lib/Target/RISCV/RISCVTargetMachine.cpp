@@ -211,7 +211,7 @@ RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
       gVortexBranchDivergenceOptLevel =
           std::stoi(std::string(std::getenv("VORTEX_DIVERGENCE_OPT_LEVEL")));
     if (gVortexBranchDivergenceOptLevel > 10 ||
-        gVortexBranchDivergenceOptLevel < 1)
+        gVortexBranchDivergenceOptLevel <= 0)
       gVortexBranchDivergenceMode = 8;
     dbgs() << "LLVM : Mode " << gVortexBranchDivergenceMode << ", Opt "
            << gVortexBranchDivergenceOptLevel << "\n";
@@ -321,7 +321,7 @@ bool RISCVTargetMachine::isNoopAddrSpaceCast(unsigned SrcAS,
 
 void RISCVTargetMachine::registerPassBuilderCallbacks(
     PassBuilder &PB, bool PopulateClassToPassNames) {
-  if (gVortexBranchDivergenceMode != 0 && gVortexBranchDivergenceOptLevel >= 2) {
+  if (gVortexBranchDivergenceOptLevel >= 3) {
     PB.registerPipelineStartEPCallback(
       [this](ModulePassManager &PM, OptimizationLevel Level) {
         FunctionPassManager FPM;
@@ -540,19 +540,19 @@ bool RISCVPassConfig::addPreISel() {
     }
 
     addPass(createUnifyLoopExitsPass());
-    if (gVortexBranchDivergenceOptLevel >= 3) // SJ : for testing
+    if (gVortexBranchDivergenceOptLevel >= 4) // SJ : for testing
       addPass(createVortexDivergenceAnalysis0Pass());
 
     addPass(createVortexBranchDivergence0Pass());
 
     addPass(createStructurizeCFGPass(true, (gVortexBranchDivergenceMode == 1)));
 
-    if (gVortexBranchDivergenceOptLevel >= 3) // SJ : for testing
+    if (gVortexBranchDivergenceOptLevel >= 4) // SJ : for testing
       addPass(createVortexDivergenceAnalysis0Pass());
   
     addPass(createVortexBranchDivergence1Pass(gVortexBranchDivergenceMode));
 
-    if (gVortexBranchDivergenceOptLevel >= 3) // SJ : for testing
+    if (gVortexBranchDivergenceOptLevel >= 4) // SJ : for testing
       addPass(createVortexDivergenceAnalysis1Pass());
   }
   if (VortexKernelSchedulerMode != 0) {
