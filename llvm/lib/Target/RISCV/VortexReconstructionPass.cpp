@@ -83,8 +83,8 @@ bool VortexReconstruction::runOnFunction(Function &F) {
 
   LLVM_DEBUG(dbgs() << "Reconstruction pass \n");
   LLVM_DEBUG(dbgs() << "Function name: " << F.getName() << "\n");
-  //LLVM_DEBUG(dbgs() << "Function IR:\n");
-  //LLVM_DEBUG(F.print(dbgs(), nullptr));
+  LLVM_DEBUG(dbgs() << "Function IR:\n");
+  LLVM_DEBUG(F.print(dbgs(), nullptr));
 
   //  Build Control Dependency Graph (CDGMap)
   std::map<BasicBlock *, std::set<BasicBlock *>> CDGMap;
@@ -328,8 +328,8 @@ bool VortexReconstruction::runOnFunction(Function &F) {
   LLVM_DEBUG(dbgs() << "after Reconstruction pass \n");
   dbgs() << "ReconstructionPass: is cloned ? " << cloned << "\n";
   LLVM_DEBUG(dbgs() << "Function name: " << F.getName() << "\n");
-  //LLVM_DEBUG(dbgs() << "Function IR:\n");
-  //LLVM_DEBUG(F.print(dbgs(), nullptr));
+  LLVM_DEBUG(dbgs() << "Function IR:\n");
+  LLVM_DEBUG(F.print(dbgs(), nullptr));
 
   return cloned;
 }
