@@ -54,6 +54,8 @@ using namespace llvm;
 
 STATISTIC(NumTailCalls, "Number of tail calls");
 
+extern int gVortexBranchDivergenceMode;
+
 static cl::opt<unsigned> ExtensionMaxWebSize(
     DEBUG_TYPE "-ext-max-web-size", cl::Hidden,
     cl::desc("Give the maximum size (in number of nodes) of the web of "
@@ -19232,6 +19234,9 @@ static MachineBasicBlock *emitReadCounterWidePseudo(MachineInstr &MI,
       .addImm(HiCounter)
       .addReg(RISCV::X0);
 
+  llvm::errs() << "error: unimplemented divergent codegen found!\n";
+  std::abort();
+
   BuildMI(LoopMBB, DL, TII->get(RISCV::BNE))
       .addReg(HiReg)
       .addReg(ReadAgainReg)
@@ -19370,6 +19375,96 @@ static MachineBasicBlock *emitQuietFCMP(MachineInstr &MI, MachineBasicBlock *BB,
   return BB;
 }
 
+static Register BrCondToNECodeGen(RISCVCC::CondCode CC,
+                                  Register LHS,
+                                  Register RHS,
+                                  MachineBasicBlock &MBB,
+                                  const MachineBasicBlock::iterator& loc,
+                                  const DebugLoc& DL,
+                                  const TargetInstrInfo& TII) {
+  auto Result = MBB.getParent()->getRegInfo().createVirtualRegister(&RISCV::GPRRegClass);
+  switch (CC) {
+  default:
+    llvm_unreachable("Unknown condition code!");
+  case RISCVCC::COND_EQ: {
+    auto Result1 = MBB.getParent()->getRegInfo().createVirtualRegister(&RISCV::GPRRegClass);
+    BuildMI(MBB, loc, DL, TII.get(RISCV::XOR), Result1)
+        .addReg(LHS)
+        .addReg(RHS);
+    BuildMI(MBB, loc, DL, TII.get(RISCV::SLTIU), Result)
+        .addReg(Result1)
+        .addImm(1);
+    } break;
+  case RISCVCC::COND_NE: {
+    auto Result1 = MBB.getParent()->getRegInfo().createVirtualRegister(&RISCV::GPRRegClass);
+    BuildMI(MBB, loc, DL, TII.get(RISCV::XOR), Result1)
+        .addReg(LHS)
+        .addReg(RHS);
+    BuildMI(MBB, loc, DL, TII.get(RISCV::SLTU), Result)
+        .addReg(RISCV::X0)
+        .addReg(Result1);
+    } break;
+  case RISCVCC::COND_LT:
+    BuildMI(MBB, loc, DL, TII.get(RISCV::SLT), Result)
+        .addReg(LHS)
+        .addReg(RHS);
+    break;
+  case RISCVCC::COND_GE:
+    BuildMI(MBB, loc, DL, TII.get(RISCV::SLT), Result)
+        .addReg(RHS)
+        .addReg(LHS);
+    break;
+  case RISCVCC::COND_LTU:
+    BuildMI(MBB, loc, DL, TII.get(RISCV::SLTU), Result)
+        .addReg(LHS)
+        .addReg(RHS);
+    break;
+  case RISCVCC::COND_GEU:
+    BuildMI(MBB, loc, DL, TII.get(RISCV::SLTU), Result)
+        .addReg(RHS)
+        .addReg(LHS);
+    break;
+  }
+  return Result;
+}
+
+static void InsertVXSplit(Register* CondReg,
+                          Register* DVReg,
+                          RISCVCC::CondCode CC,
+                          Register LHS,
+                          Register RHS,
+                          MachineBasicBlock &MBB,
+                          const MachineBasicBlock::iterator& loc,
+                          const DebugLoc& DL,
+                          const TargetInstrInfo& TII) {
+  auto _CondReg2 = MBB.getParent()->getRegInfo().createVirtualRegister(&RISCV::GPRRegClass);
+  auto _DVReg = MBB.getParent()->getRegInfo().createVirtualRegister(&RISCV::GPRRegClass);
+
+  // convert the condition to NE
+  auto _CondReg1 = BrCondToNECodeGen(CC, LHS, RHS, MBB, loc, DL, TII);
+
+  // insert VX_MOV
+  BuildMI(MBB, loc, DL, TII.get(RISCV::VX_MOV), _CondReg2)
+        .addReg(_CondReg1);
+
+  // insert VX_SPLIT
+  BuildMI(MBB, loc, DL, TII.get(RISCV::VX_SPLIT), _DVReg)
+        .addReg(_CondReg2);
+
+  *CondReg = _CondReg2;
+  *DVReg = _DVReg;
+}
+
+static void InsertVXJoin(Register DVReg,
+                         MachineBasicBlock &MBB,
+                         const MachineBasicBlock::iterator& loc,
+                         const DebugLoc& DL,
+                         const TargetInstrInfo& TII) {
+  // insert VX_JOINT
+  BuildMI(MBB, loc, DL, TII.get(RISCV::VX_JOIN))
+        .addReg(DVReg);
+}
+
 static MachineBasicBlock *
 EmitLoweredCascadedSelect(MachineInstr &First, MachineInstr &Second,
                           MachineBasicBlock *ThisMBB,
@@ -19427,46 +19522,89 @@ EmitLoweredCascadedSelect(MachineInstr &First, MachineInstr &Second,
                   ThisMBB->end());
   SinkMBB->transferSuccessorsAndUpdatePHIs(ThisMBB);
 
-  // Fallthrough block for ThisMBB.
-  ThisMBB->addSuccessor(FirstMBB);
-  // Fallthrough block for FirstMBB.
-  FirstMBB->addSuccessor(SecondMBB);
-  ThisMBB->addSuccessor(SinkMBB);
-  FirstMBB->addSuccessor(SinkMBB);
-  // This is fallthrough.
-  SecondMBB->addSuccessor(SinkMBB);
-
   auto FirstCC = static_cast<RISCVCC::CondCode>(First.getOperand(3).getImm());
   Register FLHS = First.getOperand(1).getReg();
   Register FRHS = First.getOperand(2).getReg();
-  // Insert appropriate branch.
-  BuildMI(FirstMBB, DL, TII.getBrCond(FirstCC))
-      .addReg(FLHS)
-      .addReg(FRHS)
-      .addMBB(SinkMBB);
-
-  Register SLHS = Second.getOperand(1).getReg();
-  Register SRHS = Second.getOperand(2).getReg();
   Register Op1Reg4 = First.getOperand(4).getReg();
   Register Op1Reg5 = First.getOperand(5).getReg();
 
   auto SecondCC = static_cast<RISCVCC::CondCode>(Second.getOperand(3).getImm());
-  // Insert appropriate branch.
-  BuildMI(ThisMBB, DL, TII.getBrCond(SecondCC))
-      .addReg(SLHS)
-      .addReg(SRHS)
-      .addMBB(SinkMBB);
-
+  Register SLHS = Second.getOperand(1).getReg();
+  Register SRHS = Second.getOperand(2).getReg();
   Register DestReg = Second.getOperand(0).getReg();
   Register Op2Reg4 = Second.getOperand(4).getReg();
-  BuildMI(*SinkMBB, SinkMBB->begin(), DL, TII.get(RISCV::PHI), DestReg)
-      .addReg(Op2Reg4)
-      .addMBB(ThisMBB)
-      .addReg(Op1Reg4)
-      .addMBB(FirstMBB)
-      .addReg(Op1Reg5)
-      .addMBB(SecondMBB);
 
+  if (Subtarget.hasVendorXVortex() && gVortexBranchDivergenceMode != 0) {
+    MachineBasicBlock *SinkMBB1 = F->CreateMachineBasicBlock(LLVM_BB);
+    F->insert(It, SinkMBB1);
+
+    ThisMBB->addSuccessor(FirstMBB);
+    FirstMBB->addSuccessor(SecondMBB);
+    ThisMBB->addSuccessor(SinkMBB);
+    FirstMBB->addSuccessor(SinkMBB1);
+    SecondMBB->addSuccessor(SinkMBB1);
+    SinkMBB1->addSuccessor(SinkMBB);
+
+    Register CCReg1, DVReg1;
+    InsertVXSplit(&CCReg1, &DVReg1, FirstCC, FLHS, FRHS, *FirstMBB, FirstMBB->end(), DL, TII);
+
+    BuildMI(FirstMBB, DL, TII.getBrCond(RISCVCC::COND_NE))
+        .addReg(CCReg1)
+        .addReg(RISCV::X0)
+        .addMBB(SinkMBB1);
+
+    Register CCReg2, DVReg2;
+    InsertVXSplit(&CCReg2, &DVReg2, SecondCC, SLHS, SRHS, *ThisMBB, ThisMBB->end(), DL, TII);
+
+    BuildMI(ThisMBB, DL, TII.getBrCond(SecondCC))
+        .addReg(CCReg2)
+        .addReg(RISCV::X0)
+        .addMBB(SinkMBB);
+
+    auto DestReg1 = F->getRegInfo().createVirtualRegister(&RISCV::GPRRegClass);
+    BuildMI(*SinkMBB1, SinkMBB1->begin(), DL, TII.get(RISCV::PHI), DestReg1)
+        .addReg(Op1Reg4)
+        .addMBB(FirstMBB)
+        .addReg(Op1Reg5)
+        .addMBB(SecondMBB);
+
+    BuildMI(*SinkMBB, SinkMBB->begin(), DL, TII.get(RISCV::PHI), DestReg)
+        .addReg(Op2Reg4)
+        .addMBB(ThisMBB)
+        .addReg(DestReg1)
+        .addMBB(SinkMBB1);
+
+    InsertVXJoin(DVReg1, *SinkMBB1, SinkMBB1->begin(), DL, TII);
+    InsertVXJoin(DVReg2, *SinkMBB, SinkMBB->begin(), DL, TII);
+
+    LLVM_DEBUG(dbgs() << "*** Vortex: EmitLoweredCascadedSelect\n" <<
+      *ThisMBB << "\n" << *FirstMBB << "\n" << *SecondMBB << "\n" << *SinkMBB1 << "\n" << *SinkMBB << "\n");
+    LLVM_DEBUG(F->dump());
+  } else {
+    ThisMBB->addSuccessor(FirstMBB);
+    FirstMBB->addSuccessor(SecondMBB);
+    ThisMBB->addSuccessor(SinkMBB);
+    FirstMBB->addSuccessor(SinkMBB);
+    SecondMBB->addSuccessor(SinkMBB);
+
+    BuildMI(FirstMBB, DL, TII.getBrCond(FirstCC))
+        .addReg(FLHS)
+        .addReg(FRHS)
+        .addMBB(SinkMBB);
+
+    BuildMI(ThisMBB, DL, TII.getBrCond(SecondCC))
+        .addReg(SLHS)
+        .addReg(SRHS)
+        .addMBB(SinkMBB);
+
+    BuildMI(*SinkMBB, SinkMBB->begin(), DL, TII.get(RISCV::PHI), DestReg)
+        .addReg(Op2Reg4)
+        .addMBB(ThisMBB)
+        .addReg(Op1Reg4)
+        .addMBB(FirstMBB)
+        .addReg(Op1Reg5)
+        .addMBB(SecondMBB);
+  }
   // Now remove the Select_FPRX_s.
   First.eraseFromParent();
   Second.eraseFromParent();
@@ -19585,17 +19723,31 @@ static MachineBasicBlock *emitSelectPseudo(MachineInstr &MI,
   HeadMBB->addSuccessor(IfFalseMBB);
   HeadMBB->addSuccessor(TailMBB);
 
-  // Insert appropriate branch.
-  if (MI.getOperand(2).isImm())
+  if (Subtarget.hasVendorXVortex() && gVortexBranchDivergenceMode != 0 &&
+      MI.getOperand(2).isReg()) {
+    Register CCReg, DVReg;
+    InsertVXSplit(&CCReg, &DVReg, CC, LHS, RHS, *HeadMBB, HeadMBB->end(), DL, TII);
+
+    BuildMI(HeadMBB, DL, TII.getBrCond(RISCVCC::COND_NE))
+      .addReg(CCReg)
+      .addReg(RISCV::X0)
+      .addMBB(TailMBB);
+
+    InsertVXJoin(DVReg, *TailMBB, TailMBB->begin(), DL, TII);
+
+    LLVM_DEBUG(dbgs() << "*** Vortex: emitSelectPseudo\n" << *HeadMBB << "\n" << *TailMBB << "\n");
+    LLVM_DEBUG(F->dump());
+  } else if (MI.getOperand(2).isImm()) {
     BuildMI(HeadMBB, DL, TII.getBrCond(CC, MI.getOperand(2).isImm()))
         .addReg(LHS)
         .addImm(MI.getOperand(2).getImm())
         .addMBB(TailMBB);
-  else
+  } else {
     BuildMI(HeadMBB, DL, TII.getBrCond(CC))
         .addReg(LHS)
         .addReg(RHS)
         .addMBB(TailMBB);
+  }
 
   // IfFalseMBB just falls through to TailMBB.
   IfFalseMBB->addSuccessor(TailMBB);
@@ -19794,6 +19946,9 @@ static MachineBasicBlock *emitFROUND(MachineInstr &MI, MachineBasicBlock *MBB,
       BuildMI(MBB, DL, TII.get(CmpOpc), CmpReg).addReg(FabsReg).addReg(MaxReg);
   if (MI.getFlag(MachineInstr::MIFlag::NoFPExcept))
     MIB->setFlag(MachineInstr::MIFlag::NoFPExcept);
+
+  llvm::errs() << "error: unimplemented divergent codegen found!\n";
+  std::abort();
 
   // Insert branch.
   BuildMI(MBB, DL, TII.get(RISCV::BEQ))

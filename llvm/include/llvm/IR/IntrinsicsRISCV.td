@@ -72,6 +72,59 @@ let TargetPrefix = "riscv" in {
   //   ptr addr, ixlen cmpval, ixlen newval, ixlen mask, ixlenimm ordering)
   defm int_riscv_masked_cmpxchg : MaskedAtomicRMWFiveArgIntrinsics;
 
+  // Vortex extension
+
+  def int_riscv_vx_uniform : Intrinsic<[llvm_any_ty], [llvm_any_ty], [IntrNoMem]>;
+
+  class VortexCSRIntrinsicsImpl<LLVMType itype>
+      : Intrinsic<[itype], [], [IntrNoMem, IntrWillReturn]>;
+
+  multiclass VortexCSRIntrinsics {
+    def _i32 : VortexCSRIntrinsicsImpl<llvm_i32_ty>;
+    def _i64 : VortexCSRIntrinsicsImpl<llvm_i64_ty>;
+  }
+
+  class VortexD0S1IntrinsicsImpl<LLVMType itype>
+      : Intrinsic<[], [itype], [IntrNoMem, IntrHasSideEffects, IntrConvergent, IntrWillReturn]>;
+
+  multiclass VortexD0S1Intrinsics {
+    def _i32 : VortexD0S1IntrinsicsImpl<llvm_i32_ty>;
+    def _i64 : VortexD0S1IntrinsicsImpl<llvm_i64_ty>;
+  }
+
+  class VortexD0S2IntrinsicsImpl<LLVMType itype>
+      : Intrinsic<[], [itype, itype], [IntrNoMem, IntrHasSideEffects, IntrConvergent, IntrWillReturn]>;
+
+  multiclass VortexD0S2Intrinsics {
+    def _i32 : VortexD0S2IntrinsicsImpl<llvm_i32_ty>;
+    def _i64 : VortexD0S2IntrinsicsImpl<llvm_i64_ty>;
+  }
+
+  class VortexD1S1IntrinsicsImpl<LLVMType itype>
+      : Intrinsic<[itype], [itype], [IntrNoMem, IntrHasSideEffects, IntrConvergent, IntrWillReturn]>;
+
+  multiclass VortexD1S1Intrinsics {
+    def _i32 : VortexD1S1IntrinsicsImpl<llvm_i32_ty>;
+    def _i64 : VortexD1S1IntrinsicsImpl<llvm_i64_ty>;
+  }
+
+  defm int_riscv_vx_tmask : VortexCSRIntrinsics;
+  defm int_riscv_vx_tid : VortexCSRIntrinsics;
+  defm int_riscv_vx_wid : VortexCSRIntrinsics;
+  defm int_riscv_vx_cid : VortexCSRIntrinsics;
+  defm int_riscv_vx_nt : VortexCSRIntrinsics;
+  defm int_riscv_vx_nw : VortexCSRIntrinsics;
+  defm int_riscv_vx_nc : VortexCSRIntrinsics;
+
+  defm int_riscv_vx_tmc   : VortexD0S1Intrinsics;
+  defm int_riscv_vx_pred  : VortexD0S2Intrinsics;
+  defm int_riscv_vx_pred_n : VortexD0S2Intrinsics;
+  defm int_riscv_vx_split : VortexD1S1Intrinsics;
+  defm int_riscv_vx_split_n : VortexD1S1Intrinsics;
+  defm int_riscv_vx_join  : VortexD0S1Intrinsics;
+  defm int_riscv_vx_mov   : VortexD1S1Intrinsics;
+  defm int_riscv_vx_bar  : VortexD0S2Intrinsics;
+
 } // TargetPrefix = "riscv"
 
 //===----------------------------------------------------------------------===//
@@ -649,7 +702,7 @@ let TargetPrefix = "riscv" in {
   class RISCVClassifyMasked
         : DefaultAttrsIntrinsic<[LLVMVectorOfBitcastsToInt<0>],
                     [LLVMVectorOfBitcastsToInt<0>, llvm_anyvector_ty,
-                     LLVMScalarOrSameVectorWidth<0, llvm_i1_ty>, 
+                     LLVMScalarOrSameVectorWidth<0, llvm_i1_ty>,
                      llvm_anyint_ty, LLVMMatchType<1>],
                     [IntrNoMem, ImmArg<ArgIndex<4>>]>, RISCVVIntrinsic {
     let VLOperand = 3;

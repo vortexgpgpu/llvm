@@ -2638,3 +2638,15 @@ RISCVTTIImpl::enableMemCmpExpansion(bool OptSize, bool IsZeroCmp) const {
   }
   return Options;
 }
+
+bool RISCVTTIImpl::hasBranchDivergence(const Function *F) {
+  return hasBranchDivergence_;
+}
+
+bool RISCVTTIImpl::isSourceOfDivergence(const Value *V) {
+  return divergence_tracker_.isSourceOfDivergence(V);
+}
+
+bool RISCVTTIImpl::isAlwaysUniform(const Value *V) {
+  return divergence_tracker_.isAlwaysUniform(V);
+}

@@ -99,9 +99,12 @@ FunctionPass *createFlattenCFGPass();
 // CFG Structurization - Remove irreducible control flow
 //
 ///
-/// When \p SkipUniformRegions is true the structizer will not structurize
+/// When \p SkipUniformRegions is true the structurizer will not structurize
 /// regions that only contain uniform branches.
-Pass *createStructurizeCFGPass(bool SkipUniformRegions = false);
+/// When \p SkipRegionalBranches is true the structurizer will only structurize
+// regions that contain divergent branchs that do not form a region.
+Pass *createStructurizeCFGPass(bool SkipUniformRegions = false,
+                               bool SkipRegionalBranches = false);
 
 //===----------------------------------------------------------------------===//
 //

@@ -71,6 +71,18 @@ static cl::opt<bool>
                           cl::desc("Allow relaxed uniform region checks"),
                           cl::init(true));
 
+// Complexity guard. This pass has worst-case exponential behavior on large
+// CFGs. On musl printf/iconv-family functions (hundreds of BBs in one region)
+// it hangs the compiler for minutes-to-hours. Cap region size at a
+// conservative threshold — the critical SIMT kernels and math functions
+// (sinf etc., typically <50 BBs) are well under it. Such large regions are
+// usually in I/O / parsing / crypto code that isn't called from SIMT.
+static cl::opt<unsigned> MaxStructurizeBBs(
+    "structurizecfg-max-bbs",
+    cl::desc("Skip StructurizeCFG on regions with more BBs than this "
+             "(worst-case exponential complexity)"),
+    cl::init(100));
+
 // Definition of the complex types used in this pass.
 
 using BBValuePair = std::pair<BasicBlock *, Value *>;
@@ -365,16 +377,20 @@ public:
   void init(Region *R);
   bool run(Region *R, DominatorTree *DT);
   bool makeUniformRegion(Region *R, UniformityInfo &UA);
+  bool skipRegionalBranches(Region *R, UniformityInfo &UA);
 };
 
 class StructurizeCFGLegacyPass : public RegionPass {
   bool SkipUniformRegions;
+  bool SkipRegionalBranches;
 
 public:
   static char ID;
 
-  explicit StructurizeCFGLegacyPass(bool SkipUniformRegions_ = false)
-      : RegionPass(ID), SkipUniformRegions(SkipUniformRegions_) {
+  explicit StructurizeCFGLegacyPass(bool SkipUniformRegions_ = false,
+                                    bool SkipRegionalBranches_ = false)
+      : RegionPass(ID), SkipUniformRegions(SkipUniformRegions_)
+      , SkipRegionalBranches(SkipRegionalBranches_) {
     if (ForceSkipUniformRegions.getNumOccurrences())
       SkipUniformRegions = ForceSkipUniformRegions.getValue();
     initializeStructurizeCFGLegacyPassPass(*PassRegistry::getPassRegistry());
@@ -389,6 +405,11 @@ public:
       if (SCFG.makeUniformRegion(R, UA))
         return false;
     }
+    if (SkipRegionalBranches) {
+      auto &UA = getAnalysis<UniformityInfoWrapperPass>().getUniformityInfo();
+      if (SCFG.skipRegionalBranches(R, UA))
+        return false;
+    }
     DominatorTree *DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
     return SCFG.run(R, DT);
   }
@@ -396,7 +417,7 @@ public:
   StringRef getPassName() const override { return "Structurize control flow"; }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    if (SkipUniformRegions)
+    if (SkipUniformRegions || SkipRegionalBranches)
       AU.addRequired<UniformityInfoWrapperPass>();
     AU.addRequired<DominatorTreeWrapperPass>();
 
@@ -1295,6 +1316,37 @@ bool StructurizeCFG::makeUniformRegion(Region *R, UniformityInfo &UA) {
   return false;
 }
 
+bool StructurizeCFG::skipRegionalBranches(Region *R, UniformityInfo &UA) {
+  // Only structurize regions that contains divergent and non-regional sub-regions
+  for (auto E : R->elements()) {
+    if (E->isSubRegion())
+      continue;
+
+    auto BB = E->getEntry();
+    auto Br = dyn_cast<BranchInst>(BB->getTerminator());
+
+    // Skip non-conditional branches
+    if (Br == nullptr || !Br->isConditional())
+      continue;
+
+    // Skip uniform conditional branches
+    if (UA.isUniform(Br))
+      continue;
+
+    // Skip divergent branches that are regional
+    if (BB == R->getEntry()) {
+      LLVM_DEBUG(dbgs() << "*** structurize: skip divergent complete region " << *R << "\n");
+      continue;
+    }
+
+    // This basicblock is divergent and non-regional
+    LLVM_DEBUG(dbgs() << "*** structurize: divergent non-regional block: " << *R << "\n");
+    return false;
+  }
+
+  return true;
+}
+
 /// Run the transformation for each region found
 bool StructurizeCFG::run(Region *R, DominatorTree *DT) {
   if (R->isTopLevelRegion())
@@ -1304,6 +1356,21 @@ bool StructurizeCFG::run(Region *R, DominatorTree *DT) {
 
   Func = R->getEntry()->getParent();
   assert(hasOnlySimpleTerminator(*Func) && "Unsupported block terminator.");
+
+  // Complexity guard — see MaxStructurizeBBs at top of file. Real perf fix
+  // (NOT cosmetic): this pass has worst-case exponential behavior on large
+  // regions; without this guard, musl printf/iconv-family functions hang the
+  // compiler indefinitely. Kept independent of assertion mode.
+  unsigned BBCount = 0;
+  for (BasicBlock *BB : R->blocks()) {
+    (void)BB;
+    if (++BBCount > MaxStructurizeBBs) {
+      LLVM_DEBUG(dbgs() << "*** structurize: skip large region in "
+                        << Func->getName() << " (> " << MaxStructurizeBBs
+                        << " BBs)\n");
+      return false;
+    }
+  }
 
   ParentRegion = R;
 
@@ -1333,8 +1400,9 @@ bool StructurizeCFG::run(Region *R, DominatorTree *DT) {
   return true;
 }
 
-Pass *llvm::createStructurizeCFGPass(bool SkipUniformRegions) {
-  return new StructurizeCFGLegacyPass(SkipUniformRegions);
+Pass *llvm::createStructurizeCFGPass(bool SkipUniformRegions,
+                                     bool SkipRegionalBranches) {
+  return new StructurizeCFGLegacyPass(SkipUniformRegions, SkipRegionalBranches);
 }
 
 static void addRegionIntoQueue(Region &R, std::vector<Region *> &Regions) {

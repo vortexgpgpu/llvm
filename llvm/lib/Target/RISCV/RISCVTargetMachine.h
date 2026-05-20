@@ -58,6 +58,7 @@ public:
                                 PerFunctionMIParsingState &PFS,
                                 SMDiagnostic &Error,
                                 SMRange &SourceRange) const override;
+
   void registerPassBuilderCallbacks(PassBuilder &PB) override;
 };
 

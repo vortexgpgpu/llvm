@@ -1178,6 +1178,14 @@ def HasVendorXSfcease
       AssemblerPredicate<(all_of FeatureVendorXSfcease),
                          "'XSfcease' (SiFive sf.cease Instruction)">;
 
+def FeatureVendorXVortex
+    : RISCVExtension<1, 0,
+                     "Vortex ISA Extension", []>;
+def HasVendorXVortex
+    : Predicate<"Subtarget->hasVendorXVortex()">,
+      AssemblerPredicate<(all_of FeatureVendorXVortex),
+                         "'XVortex' (Vortex ISA Extension)">;
+
 // Core-V Extensions
 
 def FeatureVendorXCVelw

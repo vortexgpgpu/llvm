@@ -150,6 +150,12 @@ static bool unifyLoopExits(DominatorTree &DT, LoopInfo &LI, Loop *L) {
   SmallVector<BasicBlock *, 8> ExitingBlocks;
   L->getExitingBlocks(ExitingBlocks);
 
+  // A loop with no exits (e.g. `for(;;) noreturn_call();` in musl _Exit.c)
+  // has nothing to unify. ControlFlowHub::finalize would dereference an
+  // empty SetVector on this input. Bail out cleanly.
+  if (ExitingBlocks.empty())
+    return false;
+
   // Redirect exiting edges through a control flow hub.
   ControlFlowHub CHub;
   for (auto *BB : ExitingBlocks) {
