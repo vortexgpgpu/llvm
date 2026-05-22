@@ -19409,21 +19409,32 @@ static Register BrCondToNECodeGen(RISCVCC::CondCode CC,
         .addReg(LHS)
         .addReg(RHS);
     break;
-  case RISCVCC::COND_GE:
-    BuildMI(MBB, loc, DL, TII.get(RISCV::SLT), Result)
-        .addReg(RHS)
-        .addReg(LHS);
-    break;
+  case RISCVCC::COND_GE: {
+    // LHS >= RHS  <=>  !(LHS < RHS).  SLT RHS,LHS would compute LHS > RHS,
+    // which is wrong at LHS == RHS.
+    auto NotGE = MBB.getParent()->getRegInfo().createVirtualRegister(&RISCV::GPRRegClass);
+    BuildMI(MBB, loc, DL, TII.get(RISCV::SLT), NotGE)
+        .addReg(LHS)
+        .addReg(RHS);
+    BuildMI(MBB, loc, DL, TII.get(RISCV::XORI), Result)
+        .addReg(NotGE)
+        .addImm(1);
+    } break;
   case RISCVCC::COND_LTU:
     BuildMI(MBB, loc, DL, TII.get(RISCV::SLTU), Result)
         .addReg(LHS)
         .addReg(RHS);
     break;
-  case RISCVCC::COND_GEU:
-    BuildMI(MBB, loc, DL, TII.get(RISCV::SLTU), Result)
-        .addReg(RHS)
-        .addReg(LHS);
-    break;
+  case RISCVCC::COND_GEU: {
+    // LHS >=u RHS  <=>  !(LHS <u RHS).
+    auto NotGEU = MBB.getParent()->getRegInfo().createVirtualRegister(&RISCV::GPRRegClass);
+    BuildMI(MBB, loc, DL, TII.get(RISCV::SLTU), NotGEU)
+        .addReg(LHS)
+        .addReg(RHS);
+    BuildMI(MBB, loc, DL, TII.get(RISCV::XORI), Result)
+        .addReg(NotGEU)
+        .addImm(1);
+    } break;
   }
   return Result;
 }
@@ -19536,7 +19547,12 @@ EmitLoweredCascadedSelect(MachineInstr &First, MachineInstr &Second,
 
   if (Subtarget.hasVendorXVortex() && gVortexBranchDivergenceMode != 0) {
     MachineBasicBlock *SinkMBB1 = F->CreateMachineBasicBlock(LLVM_BB);
-    F->insert(It, SinkMBB1);
+    // SinkMBB1 must be laid out immediately before SinkMBB: SecondMBB is
+    // an empty block that falls through to SinkMBB1, and SinkMBB1 (ending
+    // in VX_JOIN, a non-terminator) falls through to SinkMBB. Inserting
+    // SinkMBB1 after SinkMBB would leave both fall-throughs landing in the
+    // wrong block ("MBB has unexpected successors" verifier failure).
+    F->insert(SinkMBB->getIterator(), SinkMBB1);
 
     ThisMBB->addSuccessor(FirstMBB);
     FirstMBB->addSuccessor(SecondMBB);
@@ -19556,7 +19572,13 @@ EmitLoweredCascadedSelect(MachineInstr &First, MachineInstr &Second,
     Register CCReg2, DVReg2;
     InsertVXSplit(&CCReg2, &DVReg2, SecondCC, SLHS, SRHS, *ThisMBB, ThisMBB->end(), DL, TII);
 
-    BuildMI(ThisMBB, DL, TII.getBrCond(SecondCC))
+    // InsertVXSplit already normalized SecondCC into a 0/1 predicate in
+    // CCReg2 (via BrCondToNECodeGen), so the branch must test it with
+    // COND_NE -- exactly as the FirstMBB branch above does. Using the
+    // original SecondCC here would emit e.g. BGE for a COND_GE select,
+    // which VortexBranchDivergence2 rejects ("unsupported divergent
+    // branch", it only handles BEQ/BNE against x0).
+    BuildMI(ThisMBB, DL, TII.getBrCond(RISCVCC::COND_NE))
         .addReg(CCReg2)
         .addReg(RISCV::X0)
         .addMBB(SinkMBB);
@@ -19574,8 +19596,11 @@ EmitLoweredCascadedSelect(MachineInstr &First, MachineInstr &Second,
         .addReg(DestReg1)
         .addMBB(SinkMBB1);
 
-    InsertVXJoin(DVReg1, *SinkMBB1, SinkMBB1->begin(), DL, TII);
-    InsertVXJoin(DVReg2, *SinkMBB, SinkMBB->begin(), DL, TII);
+    // The PHIs above were just placed at the top of SinkMBB1 / SinkMBB;
+    // VX_JOIN must follow them, since all PHI nodes must come first in a
+    // basic block ("PHI instruction after non-PHI" verifier failure).
+    InsertVXJoin(DVReg1, *SinkMBB1, SinkMBB1->getFirstNonPHI(), DL, TII);
+    InsertVXJoin(DVReg2, *SinkMBB, SinkMBB->getFirstNonPHI(), DL, TII);
 
     LLVM_DEBUG(dbgs() << "*** Vortex: EmitLoweredCascadedSelect\n" <<
       *ThisMBB << "\n" << *FirstMBB << "\n" << *SecondMBB << "\n" << *SinkMBB1 << "\n" << *SinkMBB << "\n");
