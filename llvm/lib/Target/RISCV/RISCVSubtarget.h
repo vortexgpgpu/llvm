@@ -204,10 +204,18 @@ public:
     return hasVInstructionsI64() ? 64 : 32;
   }
   unsigned getRealMinVLen() const {
+    // XVortex: addRegisterClass for fixed-length v*i32 / v*f32 makes those
+    // types legal even without the V extension. Optimizer passes call this
+    // without first checking hasVInstructions(); fall back to ZvlLen in that
+    // case rather than asserting in getMinRVVVectorSizeInBits.
+    if (!hasVInstructions())
+      return ZvlLen;
     unsigned VLen = getMinRVVVectorSizeInBits();
     return VLen == 0 ? ZvlLen : VLen;
   }
   unsigned getRealMaxVLen() const {
+    if (!hasVInstructions())
+      return 65536;
     unsigned VLen = getMaxRVVVectorSizeInBits();
     return VLen == 0 ? 65536 : VLen;
   }

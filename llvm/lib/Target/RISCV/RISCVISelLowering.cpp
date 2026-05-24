@@ -139,6 +139,37 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
       addRegisterClass(MVT::f64, &RISCV::GPRPairRegClass);
   }
 
+  // XVortex: register classes for grouped integer/float vector types. The
+  // intrinsic-only design routes values through `int_riscv_vx_*` calls.
+  // LOAD/STORE of the grouped types is Custom-lowered to N consecutive
+  // scalar lw/sw (or ld/sd on RV64) + REG_SEQUENCE/EXTRACT_SUBREG (see
+  // lowerXVortexGroupedLoad/Store). Lane width follows XLen.
+  if (Subtarget.hasVendorXVortex()) {
+    auto SetupXVortexVT = [this](MVT VT, const TargetRegisterClass *RC) {
+      addRegisterClass(VT, RC);
+      setOperationAction(ISD::LOAD, VT, Custom);
+      setOperationAction(ISD::STORE, VT, Custom);
+      for (unsigned Op :
+           {ISD::BUILD_VECTOR, ISD::EXTRACT_VECTOR_ELT,
+            ISD::INSERT_VECTOR_ELT, ISD::SCALAR_TO_VECTOR})
+        setOperationAction(Op, VT, Expand);
+    };
+    if (Subtarget.is64Bit()) {
+      SetupXVortexVT(MVT::v2i64, &RISCV::GPRG2RegClass);
+      SetupXVortexVT(MVT::v4i64, &RISCV::GPRG4RegClass);
+      SetupXVortexVT(MVT::v8i64, &RISCV::GPRG8RegClass);
+    } else {
+      SetupXVortexVT(MVT::v2i32, &RISCV::GPRG2RegClass);
+      SetupXVortexVT(MVT::v4i32, &RISCV::GPRG4RegClass);
+      SetupXVortexVT(MVT::v8i32, &RISCV::GPRG8RegClass);
+    }
+    if (Subtarget.hasStdExtF()) {
+      SetupXVortexVT(MVT::v2f32, &RISCV::FPRG2RegClass);
+      SetupXVortexVT(MVT::v4f32, &RISCV::FPRG4RegClass);
+      SetupXVortexVT(MVT::v8f32, &RISCV::FPRG8RegClass);
+    }
+  }
+
   static const MVT::SimpleValueType BoolVecVTs[] = {
       MVT::nxv1i1,  MVT::nxv2i1,  MVT::nxv4i1, MVT::nxv8i1,
       MVT::nxv16i1, MVT::nxv32i1, MVT::nxv64i1};
@@ -6666,6 +6697,121 @@ static SDValue SplitStrictFPVectorOp(SDValue Op, SelectionDAG &DAG) {
   return DAG.getMergeValues({V, HiRes.getValue(1)}, DL);
 }
 
+// XVortex grouped vector lowering helpers. Map a v*i32 / v*f32 MVT to its
+// (register class id, sub-register indices) pair used by REG_SEQUENCE /
+// EXTRACT_SUBREG when splitting a vector load/store into N scalar lanes.
+static bool getXVortexLanesInfo(MVT VT, unsigned &RCID, MVT &ElemVT,
+                                ArrayRef<unsigned> &SubRegs) {
+  static const unsigned GPRG2[] = {RISCV::sub_gpr_even, RISCV::sub_gpr_odd};
+  static const unsigned GPRG4[] = {RISCV::sub_gpr_g4_0, RISCV::sub_gpr_g4_1,
+                                   RISCV::sub_gpr_g4_2, RISCV::sub_gpr_g4_3};
+  static const unsigned GPRG8[] = {
+      RISCV::sub_gpr_g8_0, RISCV::sub_gpr_g8_1, RISCV::sub_gpr_g8_2,
+      RISCV::sub_gpr_g8_3, RISCV::sub_gpr_g8_4, RISCV::sub_gpr_g8_5,
+      RISCV::sub_gpr_g8_6, RISCV::sub_gpr_g8_7};
+  static const unsigned FPRG2[] = {RISCV::sub_fpr32_g2_0,
+                                   RISCV::sub_fpr32_g2_1};
+  static const unsigned FPRG4[] = {RISCV::sub_fpr32_g4_0, RISCV::sub_fpr32_g4_1,
+                                   RISCV::sub_fpr32_g4_2,
+                                   RISCV::sub_fpr32_g4_3};
+  static const unsigned FPRG8[] = {
+      RISCV::sub_fpr32_g8_0, RISCV::sub_fpr32_g8_1, RISCV::sub_fpr32_g8_2,
+      RISCV::sub_fpr32_g8_3, RISCV::sub_fpr32_g8_4, RISCV::sub_fpr32_g8_5,
+      RISCV::sub_fpr32_g8_6, RISCV::sub_fpr32_g8_7};
+  switch (VT.SimpleTy) {
+  case MVT::v2i32: RCID = RISCV::GPRG2RegClassID; ElemVT = MVT::i32; SubRegs = GPRG2; return true;
+  case MVT::v4i32: RCID = RISCV::GPRG4RegClassID; ElemVT = MVT::i32; SubRegs = GPRG4; return true;
+  case MVT::v8i32: RCID = RISCV::GPRG8RegClassID; ElemVT = MVT::i32; SubRegs = GPRG8; return true;
+  case MVT::v2i64: RCID = RISCV::GPRG2RegClassID; ElemVT = MVT::i64; SubRegs = GPRG2; return true;
+  case MVT::v4i64: RCID = RISCV::GPRG4RegClassID; ElemVT = MVT::i64; SubRegs = GPRG4; return true;
+  case MVT::v8i64: RCID = RISCV::GPRG8RegClassID; ElemVT = MVT::i64; SubRegs = GPRG8; return true;
+  case MVT::v2f32: RCID = RISCV::FPRG2RegClassID; ElemVT = MVT::f32; SubRegs = FPRG2; return true;
+  case MVT::v4f32: RCID = RISCV::FPRG4RegClassID; ElemVT = MVT::f32; SubRegs = FPRG4; return true;
+  case MVT::v8f32: RCID = RISCV::FPRG8RegClassID; ElemVT = MVT::f32; SubRegs = FPRG8; return true;
+  default: return false;
+  }
+}
+
+// XVortex load lowering: N scalar lw/flw at consecutive offsets, then
+// REG_SEQUENCE to assemble into the grouped register class. Bypasses
+// BUILD_VECTOR (which is Expand) by emitting a MachineSDNode directly.
+static SDValue lowerXVortexGroupedLoad(SDValue Op, SelectionDAG &DAG,
+                                       const RISCVSubtarget &Subtarget) {
+  auto *Load = cast<LoadSDNode>(Op);
+  MVT VT = Op.getSimpleValueType();
+  unsigned RCID;
+  MVT ElemVT;
+  ArrayRef<unsigned> SubRegs;
+  if (!getXVortexLanesInfo(VT, RCID, ElemVT, SubRegs))
+    return SDValue();
+
+  SDLoc DL(Op);
+  MVT XLenVT = Subtarget.getXLenVT();
+  unsigned NumElts = VT.getVectorNumElements();
+  unsigned ElemBytes = ElemVT.getStoreSize();
+  SDValue Chain = Load->getChain();
+  SDValue BasePtr = Load->getBasePtr();
+  auto *MMO = Load->getMemOperand();
+
+  SmallVector<SDValue, 17> RegSeqOps;
+  RegSeqOps.push_back(DAG.getTargetConstant(RCID, DL, MVT::i32));
+  SmallVector<SDValue, 8> Chains;
+  for (unsigned i = 0; i < NumElts; ++i) {
+    SDValue Addr = BasePtr;
+    if (i > 0)
+      Addr = DAG.getNode(ISD::ADD, DL, XLenVT, BasePtr,
+                         DAG.getConstant(i * ElemBytes, DL, XLenVT));
+    SDValue ElemLoad = DAG.getLoad(
+        ElemVT, DL, Chain, Addr,
+        MMO->getPointerInfo().getWithOffset(i * ElemBytes), MMO->getAlign(),
+        MMO->getFlags());
+    RegSeqOps.push_back(ElemLoad);
+    RegSeqOps.push_back(DAG.getTargetConstant(SubRegs[i], DL, MVT::i32));
+    Chains.push_back(ElemLoad.getValue(1));
+  }
+  SDValue NewChain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Chains);
+  SDValue RegSeq = SDValue(
+      DAG.getMachineNode(TargetOpcode::REG_SEQUENCE, DL, VT, RegSeqOps), 0);
+  return DAG.getMergeValues({RegSeq, NewChain}, DL);
+}
+
+// XVortex store lowering: EXTRACT_SUBREG each lane, then N scalar sw/fsw.
+static SDValue lowerXVortexGroupedStore(SDValue Op, SelectionDAG &DAG,
+                                        const RISCVSubtarget &Subtarget) {
+  auto *Store = cast<StoreSDNode>(Op);
+  SDValue Val = Store->getValue();
+  MVT VT = Val.getSimpleValueType();
+  unsigned RCID;
+  MVT ElemVT;
+  ArrayRef<unsigned> SubRegs;
+  if (!getXVortexLanesInfo(VT, RCID, ElemVT, SubRegs))
+    return SDValue();
+
+  SDLoc DL(Op);
+  MVT XLenVT = Subtarget.getXLenVT();
+  unsigned NumElts = VT.getVectorNumElements();
+  unsigned ElemBytes = ElemVT.getStoreSize();
+  SDValue Chain = Store->getChain();
+  SDValue BasePtr = Store->getBasePtr();
+  auto *MMO = Store->getMemOperand();
+
+  SmallVector<SDValue, 8> StoreChains;
+  for (unsigned i = 0; i < NumElts; ++i) {
+    SDValue Lane =
+        DAG.getTargetExtractSubreg(SubRegs[i], DL, ElemVT, Val);
+    SDValue Addr = BasePtr;
+    if (i > 0)
+      Addr = DAG.getNode(ISD::ADD, DL, XLenVT, BasePtr,
+                         DAG.getConstant(i * ElemBytes, DL, XLenVT));
+    SDValue ElemStore = DAG.getStore(
+        Chain, DL, Lane, Addr,
+        MMO->getPointerInfo().getWithOffset(i * ElemBytes), MMO->getAlign(),
+        MMO->getFlags());
+    StoreChains.push_back(ElemStore);
+  }
+  return DAG.getNode(ISD::TokenFactor, DL, MVT::Other, StoreChains);
+}
+
 SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
                                             SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {
@@ -7334,6 +7480,15 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
   case ISD::LOAD: {
     auto *Load = cast<LoadSDNode>(Op);
     EVT VecTy = Load->getMemoryVT();
+    // XVortex grouped types are intercepted before the RVV path so we don't
+    // try to lower them as RVV fixed-length vectors.
+    if (Subtarget.hasVendorXVortex() && VecTy.isSimple()) {
+      unsigned _;
+      MVT __;
+      ArrayRef<unsigned> ___;
+      if (getXVortexLanesInfo(VecTy.getSimpleVT(), _, __, ___))
+        return lowerXVortexGroupedLoad(Op, DAG, Subtarget);
+    }
     // Handle normal vector tuple load.
     if (VecTy.isRISCVVectorTuple()) {
       SDLoc DL(Op);
@@ -7377,6 +7532,14 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
     auto *Store = cast<StoreSDNode>(Op);
     SDValue StoredVal = Store->getValue();
     EVT VecTy = StoredVal.getValueType();
+    // XVortex grouped types: split into N scalar stores before RVV path.
+    if (Subtarget.hasVendorXVortex() && VecTy.isSimple()) {
+      unsigned _;
+      MVT __;
+      ArrayRef<unsigned> ___;
+      if (getXVortexLanesInfo(VecTy.getSimpleVT(), _, __, ___))
+        return lowerXVortexGroupedStore(Op, DAG, Subtarget);
+    }
     // Handle normal vector tuple store.
     if (VecTy.isRISCVVectorTuple()) {
       SDLoc DL(Op);

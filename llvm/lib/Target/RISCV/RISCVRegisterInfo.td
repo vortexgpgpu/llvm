@@ -808,3 +808,5 @@ def : RISCVRegisterClass<[XLenVT], 32, (add SF_VCIX_STATE)> {
   let RegInfos = XLenRI;
   let isAllocatable = 0;
 }
+
+include "RISCVRegisterInfoXVortex.td"

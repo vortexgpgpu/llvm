@@ -1375,6 +1375,49 @@ static MCRegister convertVRToVRMx(const MCRegisterInfo &RI, MCRegister Reg,
                                 &RISCVMCRegisterClasses[RegClassID]);
 }
 
+// XVortex: coerce a parsed GPR (e.g. x4) into a grouped tuple register class
+// (GPRG2/4/8). Returns null MCRegister if the source register isn't aligned
+// to the group size, which the caller turns into Match_InvalidOperand.
+static MCRegister convertGPRToGPRGx(const MCRegisterInfo &RI, MCRegister Reg,
+                                    unsigned Kind) {
+  unsigned RegClassID, SubReg;
+  if (Kind == MCK_GPRG2) {
+    RegClassID = RISCV::GPRG2RegClassID;
+    SubReg = RISCV::sub_gpr_even;
+  } else if (Kind == MCK_GPRG4) {
+    RegClassID = RISCV::GPRG4RegClassID;
+    SubReg = RISCV::sub_gpr_g4_0;
+  } else if (Kind == MCK_GPRG8) {
+    RegClassID = RISCV::GPRG8RegClassID;
+    SubReg = RISCV::sub_gpr_g8_0;
+  } else {
+    return MCRegister();
+  }
+  return RI.getMatchingSuperReg(Reg, SubReg,
+                                &RISCVMCRegisterClasses[RegClassID]);
+}
+
+// XVortex: coerce a parsed FPR32 (e.g. f4) into a grouped tuple register class
+// (FPRG2/4/8).
+static MCRegister convertFPR32ToFPRGx(const MCRegisterInfo &RI, MCRegister Reg,
+                                      unsigned Kind) {
+  unsigned RegClassID, SubReg;
+  if (Kind == MCK_FPRG2) {
+    RegClassID = RISCV::FPRG2RegClassID;
+    SubReg = RISCV::sub_fpr32_g2_0;
+  } else if (Kind == MCK_FPRG4) {
+    RegClassID = RISCV::FPRG4RegClassID;
+    SubReg = RISCV::sub_fpr32_g4_0;
+  } else if (Kind == MCK_FPRG8) {
+    RegClassID = RISCV::FPRG8RegClassID;
+    SubReg = RISCV::sub_fpr32_g8_0;
+  } else {
+    return MCRegister();
+  }
+  return RI.getMatchingSuperReg(Reg, SubReg,
+                                &RISCVMCRegisterClasses[RegClassID]);
+}
+
 unsigned RISCVAsmParser::validateTargetOperandClass(MCParsedAsmOperand &AsmOp,
                                                     unsigned Kind) {
   RISCVOperand &Op = static_cast<RISCVOperand &>(AsmOp);
@@ -1426,6 +1469,35 @@ unsigned RISCVAsmParser::validateTargetOperandClass(MCParsedAsmOperand &AsmOp,
     if (!Op.Reg.RegNum)
       return Match_InvalidOperand;
     return Match_Success;
+  }
+
+  // XVortex: coerce a bare GPR (e.g. x4) into the matching grouped tuple class
+  // GPRG2/4/8. Match fails (with the usual diagnostic) when the source register
+  // isn't a multiple of the group size, since getMatchingSuperReg returns null.
+  bool IsRegGPR = RISCVMCRegisterClasses[RISCV::GPRRegClassID].contains(Reg);
+  if (IsRegGPR && (Kind == MCK_GPRG2 || Kind == MCK_GPRG4 || Kind == MCK_GPRG8)) {
+    Op.Reg.RegNum = convertGPRToGPRGx(*getContext().getRegisterInfo(), Reg, Kind);
+    if (!Op.Reg.RegNum)
+      return Match_InvalidOperand;
+    return Match_Success;
+  }
+
+  // XVortex: coerce a bare FPR (parsed as FPR64 by default, possibly FPR32)
+  // into the matching grouped tuple class FPRG2/4/8. Mirrors the FPR64 -> FPR32
+  // coercion logic above.
+  if (Kind == MCK_FPRG2 || Kind == MCK_FPRG4 || Kind == MCK_FPRG8) {
+    MCRegister FPR32Reg =
+        IsRegFPR64 ? convertFPR64ToFPR32(Reg)
+                   : (RISCVMCRegisterClasses[RISCV::FPR32RegClassID].contains(Reg)
+                          ? Reg
+                          : MCRegister());
+    if (FPR32Reg) {
+      Op.Reg.RegNum = convertFPR32ToFPRGx(*getContext().getRegisterInfo(),
+                                          FPR32Reg, Kind);
+      if (!Op.Reg.RegNum)
+        return Match_InvalidOperand;
+      return Match_Success;
+    }
   }
   return Match_InvalidOperand;
 }
