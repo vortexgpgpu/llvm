@@ -162,7 +162,8 @@ getHIPOffloadTargetTriple(const Driver &D, const ArgList &Args) {
       TT->getVendor() == llvm::Triple::AMD &&
       TT->getOS() == llvm::Triple::AMDHSA)
     return TT;
-  if (TT->getArch() == llvm::Triple::spirv64)
+  if (TT->getArch() == llvm::Triple::spirv64 ||
+      TT->getArch() == llvm::Triple::spirv32)
     return TT;
   D.Diag(diag::err_drv_invalid_or_unsupported_offload_target) << TT->str();
   return std::nullopt;
@@ -6813,7 +6814,8 @@ const ToolChain &Driver::getOffloadingDeviceToolChain(
           !Args.hasArgNoClaim(options::OPT_offload_EQ))
         TC = std::make_unique<toolchains::HIPAMDToolChain>(*this, Target,
                                                            HostTC, Args);
-      else if (Target.getArch() == llvm::Triple::spirv64 &&
+      else if ((Target.getArch() == llvm::Triple::spirv64 ||
+                Target.getArch() == llvm::Triple::spirv32) &&
                Target.getVendor() == llvm::Triple::UnknownVendor &&
                Target.getOS() == llvm::Triple::UnknownOS)
         TC = std::make_unique<toolchains::HIPSPVToolChain>(*this, Target,

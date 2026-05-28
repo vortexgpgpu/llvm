@@ -158,7 +158,8 @@ void HIPSPVToolChain::addClangTargetOptions(
 }
 
 Tool *HIPSPVToolChain::buildLinker() const {
-  assert(getTriple().getArch() == llvm::Triple::spirv64);
+  assert(getTriple().getArch() == llvm::Triple::spirv64 ||
+         getTriple().getArch() == llvm::Triple::spirv32);
   return new tools::HIPSPV::Linker(*this);
 }
 
