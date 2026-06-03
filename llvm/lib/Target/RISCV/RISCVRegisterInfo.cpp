@@ -21,7 +21,9 @@
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #define GET_REGINFO_TARGET_DESC
@@ -55,11 +57,67 @@ RISCVRegisterInfo::RISCVRegisterInfo(unsigned HwMode)
     : RISCVGenRegisterInfo(RISCV::X1, /*DwarfFlavour*/0, /*EHFlavor*/0,
                            /*PC*/0, HwMode) {}
 
+// Vortex kernel entries (the `__kernel` macro, i.e. `vortex.kernel`-annotated
+// functions) are dispatched only by the hardware KMU through the shared
+// `__vx_cta_entry` trampoline, which loads the entry into the callee-saved s11,
+// calls it once via `jalr`, and then terminates the CTA (`vx_tmc 0`). The
+// trampoline never reads any callee-saved register back after the call, so such
+// entries need not preserve callee-saved registers — exactly like the GHC
+// convention. `ra` is still saved for non-leaf kernels (handled by PEI
+// independently of the CSR list), so returns to the trampoline stay correct.
+//
+// Eliding the s0-s11 / fs0-fs11 prologue/epilogue spills is a substantial win:
+// in tile-resident kernels the per-CTA spills would otherwise conflict-evict
+// reuse data from the small L1. This convention was lost in the LLVM-20 rebase;
+// restoring it here keeps the change localized to the RISC-V backend.
+//
+// The marker is honored in two forms: the "vortex-kernel" function attribute
+// (used by lit tests / any IR producer) and the `vortex.kernel` global
+// annotation that Clang emits for the `__kernel` macro. Ordinary functions and
+// `vx_spawn` software-loop callbacks are unmarked and keep the standard ABI.
+//
+// Save list for kernel entries: only the return address (X1/ra). A kernel may
+// be non-leaf (call device helpers), so ra must be preserved to return to the
+// trampoline; no other callee-saved register is preserved. ra is dropped by
+// PEI for leaf kernels automatically (saved only when actually clobbered).
+static const MCPhysReg CSR_VortexKernel_SaveList[] = {RISCV::X1, 0};
+
+static bool isVortexKernelEntry(const Function &F) {
+  if (F.hasFnAttribute("vortex-kernel"))
+    return true;
+  const Module *M = F.getParent();
+  if (!M)
+    return false;
+  const GlobalVariable *GA = M->getGlobalVariable("llvm.global.annotations");
+  if (!GA || !GA->hasInitializer())
+    return false;
+  const auto *CA = dyn_cast<ConstantArray>(GA->getInitializer());
+  if (!CA)
+    return false;
+  for (const Value *Op : CA->operands()) {
+    const auto *CS = dyn_cast<ConstantStruct>(Op);
+    if (!CS || CS->getNumOperands() < 2)
+      continue;
+    if (CS->getOperand(0)->stripPointerCasts() != &F)
+      continue;
+    const auto *StrGV =
+        dyn_cast<GlobalVariable>(CS->getOperand(1)->stripPointerCasts());
+    if (!StrGV || !StrGV->hasInitializer())
+      continue;
+    const auto *Str = dyn_cast<ConstantDataArray>(StrGV->getInitializer());
+    if (Str && Str->isCString() && Str->getAsCString() == "vortex.kernel")
+      return true;
+  }
+  return false;
+}
+
 const MCPhysReg *
 RISCVRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
   auto &Subtarget = MF->getSubtarget<RISCVSubtarget>();
   if (MF->getFunction().getCallingConv() == CallingConv::GHC)
     return CSR_NoRegs_SaveList;
+  if (isVortexKernelEntry(MF->getFunction()))
+    return CSR_VortexKernel_SaveList;
   if (MF->getFunction().hasFnAttribute("interrupt")) {
     if (Subtarget.hasStdExtD())
       return CSR_XLEN_F64_Interrupt_SaveList;
