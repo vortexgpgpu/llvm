@@ -63,6 +63,7 @@ add_llvm_target(RISCVCodeGen
   RISCVVectorMaskDAGMutation.cpp
   RISCVVectorPeephole.cpp
   RISCVVLOptimizer.cpp
+  RISCVVortexKEntry.cpp
   RISCVZacasABIFix.cpp
   VortexBranchDivergence.cpp
   VortexIntrinsicFunc.cpp

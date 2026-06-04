@@ -91,6 +91,9 @@ void initializeRISCVLoadStoreOptPass(PassRegistry &);
 FunctionPass *createRISCVZacasABIFixPass();
 void initializeRISCVZacasABIFixPass(PassRegistry &);
 
+ModulePass *createRISCVVortexKEntryPass();
+void initializeRISCVVortexKEntryPass(PassRegistry &);
+
 InstructionSelector *
 createRISCVInstructionSelector(const RISCVTargetMachine &,
                                const RISCVSubtarget &,

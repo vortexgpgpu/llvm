@@ -156,6 +156,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   initializeRISCVMakeCompressibleOptPass(*PR);
   initializeRISCVGatherScatterLoweringPass(*PR);
   initializeRISCVCodeGenPreparePass(*PR);
+  initializeRISCVVortexKEntryPass(*PR);
   initializeRISCVPostRAExpandPseudoPass(*PR);
   initializeRISCVMergeBaseOffsetOptPass(*PR);
   initializeRISCVOptWInstrsPass(*PR);
@@ -495,6 +496,7 @@ bool RISCVPassConfig::addRegAssignAndRewriteOptimized() {
 void RISCVPassConfig::addIRPasses() {
   addPass(createAtomicExpandLegacyPass());
   addPass(createRISCVZacasABIFixPass());
+  addPass(createRISCVVortexKEntryPass());
 
   if (getOptLevel() != CodeGenOptLevel::None) {
     if (EnableLoopDataPrefetch)
