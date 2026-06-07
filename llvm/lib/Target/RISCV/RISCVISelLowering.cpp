@@ -21514,7 +21514,8 @@ RISCVTargetLowering::getConstraintType(StringRef Constraint) const {
   } else {
     if (Constraint == "vr" || Constraint == "vd" || Constraint == "vm")
       return C_RegisterClass;
-    if (Constraint == "cr" || Constraint == "cR" || Constraint == "cf")
+    if (Constraint == "cr" || Constraint == "cR" || Constraint == "cf" ||
+        Constraint == "cg")
       return C_RegisterClass;
   }
   return TargetLowering::getConstraintType(Constraint);
@@ -21621,6 +21622,19 @@ RISCVTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
         return std::make_pair(0U, &RISCV::GPRPairCRegClass);
       if (Subtarget.hasStdExtZdinx() && Subtarget.is64Bit())
         return std::make_pair(0U, &RISCV::GPRCRegClass);
+    }
+  } else if (Constraint == "cg") {
+    // XVortex grouped register tuples, selected by the operand's vector type.
+    // Binds an aligned register group (FPRG2/4/8 or GPRG2/4/8) as one inline-asm
+    // operand so a custom op can read/write the whole window via a base register.
+    switch (VT.SimpleTy) {
+    case MVT::v2f32: return std::make_pair(0U, &RISCV::FPRG2RegClass);
+    case MVT::v4f32: return std::make_pair(0U, &RISCV::FPRG4RegClass);
+    case MVT::v8f32: return std::make_pair(0U, &RISCV::FPRG8RegClass);
+    case MVT::v2i32: case MVT::v2i64: return std::make_pair(0U, &RISCV::GPRG2RegClass);
+    case MVT::v4i32: case MVT::v4i64: return std::make_pair(0U, &RISCV::GPRG4RegClass);
+    case MVT::v8i32: case MVT::v8i64: return std::make_pair(0U, &RISCV::GPRG8RegClass);
+    default: break;
     }
   }
 

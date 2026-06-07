@@ -101,8 +101,11 @@ bool RISCVTargetInfo::validateAsmConstraint(
     Info.setAllowsRegister();
     return true;
   case 'c':
-    // A RVC register - GPR or FPR
-    if (Name[1] == 'r' || Name[1] == 'R' || Name[1] == 'f') {
+    // 'cr'/'cR'/'cf': an RVC register - GPR or FPR.
+    // 'cg': an XVortex grouped register tuple (FPRG2/4/8, GPRG2/4/8), selected
+    // by the operand's vector type — binds an aligned register group as a single
+    // inline-asm operand for custom accelerator ops.
+    if (Name[1] == 'r' || Name[1] == 'R' || Name[1] == 'f' || Name[1] == 'g') {
       Info.setAllowsRegister();
       Name += 1;
       return true;

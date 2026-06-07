@@ -383,9 +383,26 @@ bool RISCVAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
   case MachineOperand::MO_Immediate:
     OS << MO.getImm();
     return false;
-  case MachineOperand::MO_Register:
-    OS << RISCVInstPrinter::getRegisterName(MO.getReg());
+  case MachineOperand::MO_Register: {
+    MCRegister Reg = MO.getReg();
+    // XVortex grouped tuples bound via the "cg" inline-asm constraint print as
+    // their base sub-register, so `.insn` encodes the group's first register.
+    const RISCVRegisterInfo *TRI = STI->getRegisterInfo();
+    if (RISCV::FPRG2RegClass.contains(Reg))
+      Reg = TRI->getSubReg(Reg, RISCV::sub_fpr32_g2_0);
+    else if (RISCV::FPRG4RegClass.contains(Reg))
+      Reg = TRI->getSubReg(Reg, RISCV::sub_fpr32_g4_0);
+    else if (RISCV::FPRG8RegClass.contains(Reg))
+      Reg = TRI->getSubReg(Reg, RISCV::sub_fpr32_g8_0);
+    else if (RISCV::GPRG2RegClass.contains(Reg))
+      Reg = TRI->getSubReg(Reg, RISCV::sub_gpr_even);
+    else if (RISCV::GPRG4RegClass.contains(Reg))
+      Reg = TRI->getSubReg(Reg, RISCV::sub_gpr_g4_0);
+    else if (RISCV::GPRG8RegClass.contains(Reg))
+      Reg = TRI->getSubReg(Reg, RISCV::sub_gpr_g8_0);
+    OS << RISCVInstPrinter::getRegisterName(Reg);
     return false;
+  }
   case MachineOperand::MO_GlobalAddress:
     PrintSymbolOperand(MO, OS);
     return false;
