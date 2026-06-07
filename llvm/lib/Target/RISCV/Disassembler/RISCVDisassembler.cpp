@@ -280,92 +280,6 @@ static DecodeStatus DecodeVRM4RegisterClass(MCInst &Inst, uint32_t RegNo,
   return MCDisassembler::Success;
 }
 
-// XVortex grouped-register decoders. Pattern mirrors DecodeVRM2/4/8: validate
-// alignment, then coerce the parsed sub-register into the grouped superreg.
-static DecodeStatus DecodeGPRG2RegisterClass(MCInst &Inst, uint32_t RegNo,
-                                             uint64_t Address,
-                                             const MCDisassembler *Decoder) {
-  if (RegNo >= 32 || RegNo % 2)
-    return MCDisassembler::Fail;
-  const MCRegisterInfo *RI =
-      static_cast<const RISCVDisassembler *>(Decoder)->getContext().getRegisterInfo();
-  MCRegister Reg = RI->getMatchingSuperReg(
-      RISCV::X0 + RegNo, RISCV::sub_gpr_even,
-      &RISCVMCRegisterClasses[RISCV::GPRG2RegClassID]);
-  Inst.addOperand(MCOperand::createReg(Reg));
-  return MCDisassembler::Success;
-}
-
-static DecodeStatus DecodeGPRG4RegisterClass(MCInst &Inst, uint32_t RegNo,
-                                             uint64_t Address,
-                                             const MCDisassembler *Decoder) {
-  if (RegNo >= 32 || RegNo % 4)
-    return MCDisassembler::Fail;
-  const MCRegisterInfo *RI =
-      static_cast<const RISCVDisassembler *>(Decoder)->getContext().getRegisterInfo();
-  MCRegister Reg = RI->getMatchingSuperReg(
-      RISCV::X0 + RegNo, RISCV::sub_gpr_g4_0,
-      &RISCVMCRegisterClasses[RISCV::GPRG4RegClassID]);
-  Inst.addOperand(MCOperand::createReg(Reg));
-  return MCDisassembler::Success;
-}
-
-static DecodeStatus DecodeGPRG8RegisterClass(MCInst &Inst, uint32_t RegNo,
-                                             uint64_t Address,
-                                             const MCDisassembler *Decoder) {
-  if (RegNo >= 32 || RegNo % 8)
-    return MCDisassembler::Fail;
-  const MCRegisterInfo *RI =
-      static_cast<const RISCVDisassembler *>(Decoder)->getContext().getRegisterInfo();
-  MCRegister Reg = RI->getMatchingSuperReg(
-      RISCV::X0 + RegNo, RISCV::sub_gpr_g8_0,
-      &RISCVMCRegisterClasses[RISCV::GPRG8RegClassID]);
-  Inst.addOperand(MCOperand::createReg(Reg));
-  return MCDisassembler::Success;
-}
-
-static DecodeStatus DecodeFPRG2RegisterClass(MCInst &Inst, uint32_t RegNo,
-                                             uint64_t Address,
-                                             const MCDisassembler *Decoder) {
-  if (RegNo >= 32 || RegNo % 2)
-    return MCDisassembler::Fail;
-  const MCRegisterInfo *RI =
-      static_cast<const RISCVDisassembler *>(Decoder)->getContext().getRegisterInfo();
-  MCRegister Reg = RI->getMatchingSuperReg(
-      RISCV::F0_F + RegNo, RISCV::sub_fpr32_g2_0,
-      &RISCVMCRegisterClasses[RISCV::FPRG2RegClassID]);
-  Inst.addOperand(MCOperand::createReg(Reg));
-  return MCDisassembler::Success;
-}
-
-static DecodeStatus DecodeFPRG4RegisterClass(MCInst &Inst, uint32_t RegNo,
-                                             uint64_t Address,
-                                             const MCDisassembler *Decoder) {
-  if (RegNo >= 32 || RegNo % 4)
-    return MCDisassembler::Fail;
-  const MCRegisterInfo *RI =
-      static_cast<const RISCVDisassembler *>(Decoder)->getContext().getRegisterInfo();
-  MCRegister Reg = RI->getMatchingSuperReg(
-      RISCV::F0_F + RegNo, RISCV::sub_fpr32_g4_0,
-      &RISCVMCRegisterClasses[RISCV::FPRG4RegClassID]);
-  Inst.addOperand(MCOperand::createReg(Reg));
-  return MCDisassembler::Success;
-}
-
-static DecodeStatus DecodeFPRG8RegisterClass(MCInst &Inst, uint32_t RegNo,
-                                             uint64_t Address,
-                                             const MCDisassembler *Decoder) {
-  if (RegNo >= 32 || RegNo % 8)
-    return MCDisassembler::Fail;
-  const MCRegisterInfo *RI =
-      static_cast<const RISCVDisassembler *>(Decoder)->getContext().getRegisterInfo();
-  MCRegister Reg = RI->getMatchingSuperReg(
-      RISCV::F0_F + RegNo, RISCV::sub_fpr32_g8_0,
-      &RISCVMCRegisterClasses[RISCV::FPRG8RegClassID]);
-  Inst.addOperand(MCOperand::createReg(Reg));
-  return MCDisassembler::Success;
-}
-
 static DecodeStatus DecodeVRM8RegisterClass(MCInst &Inst, uint32_t RegNo,
                                             uint64_t Address,
                                             const MCDisassembler *Decoder) {
@@ -807,8 +721,6 @@ DecodeStatus RISCVDisassembler::getInstruction32(MCInst &MI, uint64_t &Size,
                         "Qualcomm uC Conditional Move custom opcode table");
   TRY_TO_DECODE_FEATURE(RISCV::FeatureVendorXqciint, DecoderTableXqciint32,
                         "Qualcomm uC Interrupts custom opcode table");
-  TRY_TO_DECODE_FEATURE(RISCV::FeatureVendorXVortex, DecoderTableXVortex32,
-                        "Vortex grouped register custom opcode table");
   TRY_TO_DECODE(true, DecoderTable32, "RISCV32 table");
 
   return MCDisassembler::Fail;

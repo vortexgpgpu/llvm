@@ -1936,4 +1936,3 @@ let TargetPrefix = "riscv" in {
 include "llvm/IR/IntrinsicsRISCVXTHead.td"
 include "llvm/IR/IntrinsicsRISCVXsf.td"
 include "llvm/IR/IntrinsicsRISCVXCV.td"
-include "llvm/IR/IntrinsicsRISCVXVortex.td"

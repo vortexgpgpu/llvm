@@ -23463,31 +23463,6 @@ Value *CodeGenFunction::EmitRISCVBuiltinExpr(unsigned BuiltinID,
     ID = Intrinsic::riscv_cv_alu_subuRN;
     break;
 
-  // XVortex grouped vxadd — integer variants overloaded on lane width
-  // (v*i32 on RV32 / v*i64 on RV64), so we pass the result type explicitly.
-  case RISCV::BI__builtin_riscv_vx_add_x_g2:
-    ID = Intrinsic::riscv_vx_add_x_g2;
-    IntrinsicTypes = {ConvertType(E->getType())};
-    break;
-  case RISCV::BI__builtin_riscv_vx_add_x_g4:
-    ID = Intrinsic::riscv_vx_add_x_g4;
-    IntrinsicTypes = {ConvertType(E->getType())};
-    break;
-  case RISCV::BI__builtin_riscv_vx_add_x_g8:
-    ID = Intrinsic::riscv_vx_add_x_g8;
-    IntrinsicTypes = {ConvertType(E->getType())};
-    break;
-  // Float variants stay at fixed v*f32 (lane width is XLen-independent).
-  case RISCV::BI__builtin_riscv_vx_add_f_g2:
-    ID = Intrinsic::riscv_vx_add_f_g2;
-    break;
-  case RISCV::BI__builtin_riscv_vx_add_f_g4:
-    ID = Intrinsic::riscv_vx_add_f_g4;
-    break;
-  case RISCV::BI__builtin_riscv_vx_add_f_g8:
-    ID = Intrinsic::riscv_vx_add_f_g8;
-    break;
-
     // Vector builtins are handled from here.
 #include "clang/Basic/riscv_vector_builtin_cg.inc"
 
