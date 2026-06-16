@@ -22,6 +22,7 @@
 #include "llvm/IR/ModuleSlotTracker.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/DerivedTypes.h"        // for PointerType
+#include "llvm/IR/InlineAsm.h"           // for SCS vx_yield emission
 
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h"
@@ -1359,6 +1360,30 @@ void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* funct
     auto header = loop->getHeader();
     assert(header);
 
+    // SCS: a loop that performs an atomic RMW (e.g. a spin-lock acquire) may
+    // block on a sibling lane; emit vx_yield on its back-edge so a blocked
+    // subgroup deschedules and lets the lock holder run. Normal (lane-
+    // independent) loops are left yield-free to avoid scheduling overhead.
+    bool loop_blocks = false;
+    for (auto bb : loop->blocks()) {
+      for (auto &I : *bb) {
+        // native LLVM atomics
+        if (isa<AtomicRMWInst>(I) || isa<AtomicCmpXchgInst>(I)) { loop_blocks = true; break; }
+        // OpenCL atomic builtins lower to a call (e.g. _cl_atomic_xchg) and an
+        // inline-asm amo*; treat either as a potential blocking acquisition.
+        if (auto *CB = dyn_cast<CallBase>(&I)) {
+          if (auto *IA = dyn_cast<InlineAsm>(CB->getCalledOperand())) {
+            std::string s = IA->getAsmString();
+            if (s.find("amo") != std::string::npos || s.find("lr.") != std::string::npos) { loop_blocks = true; break; }
+          }
+          if (auto *F = CB->getCalledFunction()) {
+            if (F->getName().contains("atomic")) { loop_blocks = true; break; }
+          }
+        }
+      }
+      if (loop_blocks) break;
+    }
+
     auto preheader = loop->getLoopPreheader();
     assert(preheader);
 
@@ -1410,6 +1435,13 @@ void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* funct
           LLVM_DEBUG(dbgs() << "*** VX: insert thread predicate '" << namePrinter_.ValueName(cond) << "' before exiting block: " << namePrinter_.BBName(exiting_block) << "\n");
           if (!loop->contains(succ0)) {
             CallInst::Create(pred_n_func_, {cond, tmask}, "", branch);
+            // SCS: spinners (lanes kept active by pred_n) yield on the back-edge.
+            if (loop_blocks) {
+              auto yield_ty = FunctionType::get(Type::getVoidTy(*context), false);
+              auto yield_asm = InlineAsm::get(yield_ty, ".insn r 0x0B, 0, 5, x0, x0, x0", "~{memory}", /*hasSideEffects=*/true);
+              CallInst::Create(yield_asm, "", branch);
+              LLVM_DEBUG(dbgs() << "*** VX: insert vx_yield on blocking-loop back-edge: " << namePrinter_.BBName(exiting_block) << "\n");
+            }
           } else {
             CallInst::Create(pred_func_, {cond, tmask}, "", branch);
           }
