@@ -1219,6 +1219,24 @@ void VortexBranchDivergence1::initialize(Function &F) {
   loops_set_.clear();
 }
 
+// Replace every riscv_vx_uniform marker in F with its source operand and erase
+// it. These markers are uniformity hints with no backend lowering — they are
+// inserted by UniformAnnotationPass and consumed by the divergence analysis, but
+// MUST be removed before instruction selection (otherwise ISel fails with
+// "cannot select intrinsic llvm.riscv.vx.uniform"). Safe to run after the
+// analysis, or on the size-guard bail-out path where no analysis ran.
+static void stripVxUniformMarkers(Function &F) {
+  for (auto iter = inst_begin(F), iterE = inst_end(F); iter != iterE;) {
+    auto &I = *iter++;
+    if (auto II = dyn_cast<IntrinsicInst>(&I)) {
+      if (II->getIntrinsicID() == Intrinsic::riscv_vx_uniform) {
+        II->replaceAllUsesWith(II->getOperand(0));
+        II->eraseFromParent();
+      }
+    }
+  }
+}
+
 bool VortexBranchDivergence1::runOnFunction(Function &F) {
   LLVM_DEBUG(dbgs() << "*** VX: VortexBranchDivergence1::runOnFunction(): " << F.getName() << "\n");
 
@@ -1229,6 +1247,9 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
     LLVM_DEBUG(dbgs() << "*** VX: skip divergence on " << F.getName()
                       << " (" << F.size() << " BBs > "
                       << VortexMaxDivergenceBBs << ")\n");
+    // We skip the divergence transformation, but the riscv_vx_uniform markers
+    // still need stripping — leaving them in reaches ISel as "cannot select".
+    stripVxUniformMarkers(F);
     return false;
   }
 
@@ -1335,17 +1356,8 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
     LLVM_DEBUG(dbgs() << "*** VX: after changes!\n" << F << "\n");
   }
 
-  // remove uniform intrinsics
-  for (auto iter = inst_begin(F), iterE = inst_end(F); iter != iterE;) {
-    auto& I = *iter++;
-    if (auto II = dyn_cast<IntrinsicInst>(&I)) {
-      if (II->getIntrinsicID() == Intrinsic::riscv_vx_uniform) {
-        auto src = II->getOperand(0);
-        II->replaceAllUsesWith(src);
-        II->eraseFromParent();
-      }
-    }
-  }
+  // remove uniform intrinsics (now that the divergence analysis is done)
+  stripVxUniformMarkers(F);
 
   return changed;
 }
