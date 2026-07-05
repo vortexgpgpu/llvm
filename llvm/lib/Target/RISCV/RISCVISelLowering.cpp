@@ -151,7 +151,14 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
       setOperationAction(ISD::STORE, VT, Custom);
       for (unsigned Op :
            {ISD::BUILD_VECTOR, ISD::EXTRACT_VECTOR_ELT,
-            ISD::INSERT_VECTOR_ELT, ISD::SCALAR_TO_VECTOR})
+            ISD::INSERT_VECTOR_ELT, ISD::SCALAR_TO_VECTOR,
+            // XVortex has no cross-lane / per-lane vector patterns for these;
+            // expand (scalarize) them into per-lane extract/insert + scalar
+            // ops. Without this, code like float4 component-wise selects or
+            // shuffles hits "Cannot select" (e.g. hybridsort mergeSortPass).
+            ISD::VECTOR_SHUFFLE, ISD::SELECT, ISD::SELECT_CC, ISD::VSELECT,
+            ISD::SETCC, ISD::CONCAT_VECTORS, ISD::EXTRACT_SUBVECTOR,
+            ISD::INSERT_SUBVECTOR})
         setOperationAction(Op, VT, Expand);
     };
     if (Subtarget.is64Bit()) {
@@ -2873,7 +2880,15 @@ InstructionCost RISCVTargetLowering::getLMULCost(MVT VT) const {
     else
       Cost = (LMul * DLenFactor);
   } else {
-    Cost = divideCeil(VT.getSizeInBits(), Subtarget.getRealMinVLen() / DLenFactor);
+    // Fixed-length vectors. XVortex grouped vectors are fixed-length but the
+    // target has no RVV VLEN, so getRealMinVLen() is 0 and the RVV-style
+    // divisor collapses to 0 -> divide-by-zero. Fall back to a scalar-lane
+    // cost (one op per XLen-wide lane) whenever there is no real VLEN.
+    unsigned MinVLen = Subtarget.getRealMinVLen();
+    unsigned Denom = MinVLen / DLenFactor;
+    if (Denom == 0)
+      return divideCeil(VT.getSizeInBits(), Subtarget.getXLen());
+    Cost = divideCeil(VT.getSizeInBits(), Denom);
   }
   return Cost;
 }
