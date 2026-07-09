@@ -158,7 +158,21 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
             // shuffles hits "Cannot select" (e.g. hybridsort mergeSortPass).
             ISD::VECTOR_SHUFFLE, ISD::SELECT, ISD::SELECT_CC, ISD::VSELECT,
             ISD::SETCC, ISD::CONCAT_VECTORS, ISD::EXTRACT_SUBVECTOR,
-            ISD::INSERT_SUBVECTOR})
+            ISD::INSERT_SUBVECTOR,
+            // Floating-point math
+            ISD::FADD, ISD::FSUB, ISD::FMUL, ISD::FDIV,
+            // Integer math
+            ISD::ADD,  ISD::SUB,  ISD::MUL,
+            // Signed & Unsigned Integer Division / Remainder
+            ISD::SDIV, ISD::UDIV, ISD::SREM, ISD::UREM,
+						// Min and Max
+            ISD::FMINNUM, ISD::FMAXNUM,
+            ISD::FMINIMUM, ISD::FMAXIMUM,
+            ISD::SMIN, ISD::SMAX,
+            ISD::UMIN, ISD::UMAX,
+            // Rounding and Truncation
+            ISD::FFLOOR, ISD::FCEIL, 
+            ISD::FROUND, ISD::FROUNDEVEN, ISD::FTRUNC})
         setOperationAction(Op, VT, Expand);
     };
     if (Subtarget.is64Bit()) {
