@@ -70,10 +70,10 @@ static cl::opt<VortexDivergenceArch> VortexDivergenceArchOpt(
   cl::desc("Set Vortex divergence architecture"),
   cl::values(
     clEnumValN(VXDA_IPDOM,  "ipdom",  "baseline IPDOM split/join"),
-    clEnumValN(VXDA_TSPLIT, "tsplit", "threadsplit: split/join + vx_yield on blocking loops"),
+    clEnumValN(VXDA_SCS,    "scs",    "ThreadSplit (SCS): split/join + vx_yield on blocking loops"),
     clEnumValN(VXDA_ITS,    "its",    "per-thread-PC convergence barriers (vx_bar_add/vx_bar_wait)")),
-  cl::init(VXDA_TSPLIT));
-int gVortexDivergenceArch = VXDA_TSPLIT;
+  cl::init(VXDA_SCS));
+int gVortexDivergenceArch = VXDA_SCS;
 
 // FIXME: Unify control over GlobalMerge.
 static cl::opt<cl::boolOrDefault>

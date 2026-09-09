@@ -1,9 +1,9 @@
 ; Test the -vortex-divergence-arch codegen modes.
 ; RUN: llc -march=riscv32 -mattr=+m,+a,+xvortex -vortex-divergence-arch=ipdom -O2 < %s | FileCheck %s --check-prefixes=IPDOM
-; RUN: llc -march=riscv32 -mattr=+m,+a,+xvortex -vortex-divergence-arch=tsplit -O2 < %s | FileCheck %s --check-prefixes=TSPLIT
+; RUN: llc -march=riscv32 -mattr=+m,+a,+xvortex -vortex-divergence-arch=scs -O2 < %s | FileCheck %s --check-prefixes=SCS
 ; RUN: llc -march=riscv32 -mattr=+m,+a,+xvortex -vortex-divergence-arch=its -O2 < %s | FileCheck %s --check-prefixes=ITS
-; RUN: llc -march=riscv32 -mattr=+m,+a,+xvortex -vortex-divergence-arch=its -vortex-its-yield=0 -O2 < %s | FileCheck %s --check-prefixes=ITSCB
-; RUN: llc -march=riscv32 -mattr=+m,+a,+xvortex -O2 < %s | FileCheck %s --check-prefixes=TSPLIT
+; RUN: llc -march=riscv32 -mattr=+m,+a,+xvortex -vortex-divergence-arch=its -vortex-scs-yield=0 -O2 < %s | FileCheck %s --check-prefixes=ITSCB
+; RUN: llc -march=riscv32 -mattr=+m,+a,+xvortex -O2 < %s | FileCheck %s --check-prefixes=SCS
 
 target datalayout = "e-m:e-p:32:32-i64:64-n32-S128"
 target triple = "riscv32"
@@ -11,7 +11,7 @@ target triple = "riscv32"
 declare i32 @llvm.riscv.vx.tid.i32()
 
 ; A divergent branch with side effects on both paths: split/join under
-; ipdom/tsplit, bar_add/bar_wait under its.
+; ipdom/scs, bar_add/bar_wait under its.
 
 ; IPDOM-LABEL: branch_kernel:
 ; IPDOM: vx_split
@@ -19,10 +19,10 @@ declare i32 @llvm.riscv.vx.tid.i32()
 ; IPDOM-NOT: vx_yield
 ; IPDOM-NOT: vx_bar_add
 
-; TSPLIT-LABEL: branch_kernel:
-; TSPLIT: vx_split
-; TSPLIT: vx_join
-; TSPLIT-NOT: vx_bar_add
+; SCS-LABEL: branch_kernel:
+; SCS: vx_split
+; SCS: vx_join
+; SCS-NOT: vx_bar_add
 
 ; ITS-LABEL: branch_kernel:
 ; ITS-NOT: vx_split
@@ -54,7 +54,7 @@ merge:
   ret void
 }
 
-; A divergent-exit loop: pred under ipdom/tsplit, bar_add (preheader) +
+; A divergent-exit loop: pred under ipdom/scs, bar_add (preheader) +
 ; bar_wait (exit) under its.
 
 ; IPDOM-LABEL: loop_kernel:
@@ -62,8 +62,8 @@ merge:
 ; IPDOM-NOT: vx_yield
 ; IPDOM-NOT: vx_bar_add
 
-; TSPLIT-LABEL: loop_kernel:
-; TSPLIT: vx_pred
+; SCS-LABEL: loop_kernel:
+; SCS: vx_pred
 
 ; ITS-LABEL: loop_kernel:
 ; ITS: vx_bar_add 0
@@ -88,17 +88,17 @@ exit:
   ret void
 }
 
-; A blocking (atomic) divergent loop: vx_yield on the back-edge under tsplit
+; A blocking (atomic) divergent loop: vx_yield on the back-edge under scs
 ; and its (forward progress); the ipdom baseline never yields, and
-; -vortex-its-yield=0 restores the barriers-only its arm.
+; -vortex-scs-yield=0 restores the barriers-only its arm.
 
 ; IPDOM-LABEL: lock_kernel:
 ; IPDOM: vx_pred
 ; IPDOM-NOT: vx_yield
 
-; TSPLIT-LABEL: lock_kernel:
-; TSPLIT: vx_pred
-; TSPLIT: vx_yield
+; SCS-LABEL: lock_kernel:
+; SCS: vx_pred
+; SCS: vx_yield
 
 ; ITS-LABEL: lock_kernel:
 ; ITS: vx_bar_add 0

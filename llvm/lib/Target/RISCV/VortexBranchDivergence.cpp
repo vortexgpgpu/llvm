@@ -84,10 +84,10 @@ static cl::opt<unsigned> VortexITSNumBarriers(
              "divergence architecture (must match VX_CFG_ITS_NUM_BARRIERS)"),
     cl::init(8));
 
-static cl::opt<bool> VortexITSYield(
-    "vortex-its-yield",
-    cl::desc("Emit vx_yield on blocking-loop back-edges under the ITS "
-             "divergence architecture (must match VX_CFG_ITS_YIELD_ENABLE)"),
+static cl::opt<bool> VortexSCSYield(
+    "vortex-scs-yield",
+    cl::desc("Emit vx_yield on blocking-loop back-edges under the SCS and ITS "
+             "divergence architectures (must match VX_CFG_SCS_YIELD_ENABLE)"),
     cl::init(true));
 
 namespace vortex {
@@ -1479,8 +1479,8 @@ void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* funct
           if (!loop->contains(succ0)) {
             CallInst::Create(pred_n_func_, {cond, tmask}, "", branch);
             // SCS: spinners (lanes kept active by pred_n) yield on the back-edge.
-            // Threadsplit-only: the ipdom baseline has no yield semantics.
-            if (loop_blocks && gVortexDivergenceArch == VXDA_TSPLIT) {
+            // SCS-only: the ipdom baseline has no yield semantics.
+            if (loop_blocks && VortexSCSYield && gVortexDivergenceArch == VXDA_SCS) {
               CallInst::Create(yield_func_, "", branch);
               LLVM_DEBUG(dbgs() << "*** VX: insert vx_yield on blocking-loop back-edge: " << namePrinter_.BBName(exiting_block) << "\n");
             }
@@ -1633,7 +1633,7 @@ void VortexBranchDivergence1::processITS(LLVMContext* context, Function* functio
       }
       // Blocking loops need a yield point for forward progress: a spinner
       // group parks each iteration so a blocked-on holder becomes schedulable.
-      if (VortexITSYield && loopHasBlockingOp(r.loop)) {
+      if (VortexSCSYield && loopHasBlockingOp(r.loop)) {
         SmallVector<BasicBlock*, 4> latches;
         r.loop->getLoopLatches(latches);
         for (auto latch : latches) {

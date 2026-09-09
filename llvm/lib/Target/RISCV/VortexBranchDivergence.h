@@ -9,7 +9,7 @@
 // pipeline is enabled (+xvortex and -vortex-branch-divergence != 0).
 enum VortexDivergenceArch {
   VXDA_IPDOM  = 0, // baseline IPDOM split/join
-  VXDA_TSPLIT = 1, // threadsplit: split/join + vx_yield on blocking loops
+  VXDA_SCS    = 1, // ThreadSplit (SCS): split/join + vx_yield on blocking loops
   VXDA_ITS    = 2, // per-thread-PC convergence barriers (vx_bar_add/vx_bar_wait)
 };
 extern int gVortexDivergenceArch;
