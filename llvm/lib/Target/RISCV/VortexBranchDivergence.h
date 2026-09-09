@@ -14,6 +14,22 @@ enum VortexDivergenceArch {
 };
 extern int gVortexDivergenceArch;
 
+// Fuse the divergence predicate/split into the following compare-branch, so the
+// compiler emits vx_pbr/vx_sbr (a single B-type branch) instead of the
+// setcc + vx_pred|vx_split + conditional-branch triple. Selected by
+// -vortex-fused-divergence and latched by RISCVTargetMachine. This is a
+// ThreadSplit (SCS) feature ONLY: emission is additionally gated on
+// gVortexDivergenceArch == VXDA_SCS, so the baseline IPDOM arm keeps the
+// legacy vx_split/vx_pred lowering and ITS is unaffected.
+extern int gVortexFusedDivergence;
+
+// Also fuse the divergent branch/select split into vx_sbr (implies the paired
+// vx_join becomes tokenless). Selected by -vortex-fuse-split-branch and gated on
+// gVortexFusedDivergence (SCS). Kept separate from the loop-predicate fusion
+// (vx_pbr) because sbr's stack reconvergence needs its own validation; default
+// off so vx_pbr can land independently.
+extern int gVortexFuseSplitBranch;
+
 namespace vortex {
 using namespace llvm;
 

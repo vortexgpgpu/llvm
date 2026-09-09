@@ -1693,9 +1693,113 @@ static bool FindNextJoin(MachineBasicBlock::iterator* out,
   return false;
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// SCS-only fused divergence branch (vx_pbr/vx_sbr) support.
+//
+// The fused op is a single B-type compare-branch that carries both the divergent
+// predicate/split side effect and the redirect. Its canonical semantics are:
+//   keep = active & (rs1 <cc> rs2)          (the branch-taken lanes)
+//   vx_pbr: narrow tmask to keep (park/restore); branch taken(keep) -> target
+//   vx_sbr: split then=keep / else=~keep; branch taken(keep) -> target
+// so keep == pred-kept == branch-taken, and the branch target/fall-through are
+// exactly the legacy branch's. The SCS codegen produces pred_n+beqz / split+bne
+// (neg==branch-negate), so keep -> the legacy target with no relayout; <cc>
+// folds the predicate negation (eq/ne on the materialized cond, or lt/ge/ltu/geu
+// when a reg-reg slt/sltu is absorbed).
+
+// Fused compare code (mirrors the standard branch funct3 semantics).
+enum VXFusedCC { VXCC_EQ, VXCC_NE, VXCC_LT, VXCC_GE, VXCC_LTU, VXCC_GEU };
+
+static VXFusedCC invertFusedCC(VXFusedCC cc) {
+  switch (cc) {
+  case VXCC_EQ:  return VXCC_NE;
+  case VXCC_NE:  return VXCC_EQ;
+  case VXCC_LT:  return VXCC_GE;
+  case VXCC_GE:  return VXCC_LT;
+  case VXCC_LTU: return VXCC_GEU;
+  case VXCC_GEU: return VXCC_LTU;
+  }
+  return VXCC_NE;
+}
+
+static unsigned getFusedOpcode(bool isSplit, VXFusedCC cc) {
+  if (isSplit) {
+    switch (cc) {
+    case VXCC_EQ:  return RISCV::VX_SBR_EQ;
+    case VXCC_NE:  return RISCV::VX_SBR_NE;
+    case VXCC_LT:  return RISCV::VX_SBR_LT;
+    case VXCC_GE:  return RISCV::VX_SBR_GE;
+    case VXCC_LTU: return RISCV::VX_SBR_LTU;
+    case VXCC_GEU: return RISCV::VX_SBR_GEU;
+    }
+  } else {
+    switch (cc) {
+    case VXCC_EQ:  return RISCV::VX_PBR_EQ;
+    case VXCC_NE:  return RISCV::VX_PBR_NE;
+    case VXCC_LT:  return RISCV::VX_PBR_LT;
+    case VXCC_GE:  return RISCV::VX_PBR_GE;
+    case VXCC_LTU: return RISCV::VX_PBR_LTU;
+    case VXCC_GEU: return RISCV::VX_PBR_GEU;
+    }
+  }
+  return RISCV::VX_PBR_NE;
+}
+
+// Is `reg` dead immediately after `pos` in `MBB` (no later use in MBB, not
+// live-out through any successor)? Post-RA physical-reg query.
+static bool fusedRegDeadAfter(MachineBasicBlock &MBB,
+                              MachineBasicBlock::iterator pos,
+                              Register reg,
+                              const TargetRegisterInfo *TRI) {
+  for (auto it = std::next(pos); it != MBB.end(); ++it) {
+    if (it->readsRegister(reg, TRI))
+      return false;
+    if (it->modifiesRegister(reg, TRI))
+      return true; // redefined before any use -> old value dead
+  }
+  for (auto *S : MBB.successors())
+    if (S->isLiveIn(reg))
+      return false;
+  return true;
+}
+
+// If `condReg` is defined in `MBB` by a reg-reg SLT/SLTU whose operands are not
+// clobbered before `brPos`, return that instruction and set (opA, opB, isUnsigned);
+// otherwise nullptr. Used to absorb the materialized comparison into the fused cc.
+static MachineInstr *findAbsorbableSetcc(MachineBasicBlock &MBB,
+                                         MachineBasicBlock::iterator brPos,
+                                         Register condReg,
+                                         Register &opA, Register &opB,
+                                         bool &isUnsigned,
+                                         const TargetRegisterInfo *TRI) {
+  MachineInstr *def = nullptr;
+  for (auto it = MachineBasicBlock::reverse_iterator(brPos); it != MBB.rend(); ++it) {
+    if (it->definesRegister(condReg, TRI)) { def = &*it; break; }
+  }
+  if (!def)
+    return nullptr;
+  unsigned op = def->getOpcode();
+  if (op != RISCV::SLT && op != RISCV::SLTU)
+    return nullptr;
+  if (!def->getOperand(1).isReg() || !def->getOperand(2).isReg())
+    return nullptr;
+  opA = def->getOperand(1).getReg();
+  opB = def->getOperand(2).getReg();
+  isUnsigned = (op == RISCV::SLTU);
+  // Ensure opA/opB are not redefined between the setcc and the branch.
+  for (auto it = std::next(MachineBasicBlock::iterator(def)); it != brPos; ++it) {
+    if (it->modifiesRegister(opA, TRI) || it->modifiesRegister(opB, TRI))
+      return nullptr;
+  }
+  return def;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
   auto &ST = MF.getSubtarget<RISCVSubtarget>();
   auto TII = ST.getInstrInfo();
+  auto TRI = ST.getRegisterInfo();
   auto& MRI = MF.getRegInfo();
 
   bool Changed = false;
@@ -1722,8 +1826,20 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
       for (auto _MII = MBB.instr_begin(), MIIEnd = MBB.instr_end(); _MII != MIIEnd;) {
         auto MII = _MII++;
         auto& MI = *MII;
-        if (!(MI.getOpcode() == RISCV::VX_SPLIT
-          || MI.getOpcode() == RISCV::VX_SPLIT_N))
+
+        bool isSplit = (MI.getOpcode() == RISCV::VX_SPLIT
+                     || MI.getOpcode() == RISCV::VX_SPLIT_N);
+        bool isPred  = (MI.getOpcode() == RISCV::VX_PRED
+                     || MI.getOpcode() == RISCV::VX_PRED_N);
+
+        // vx_pbr fuses pred; vx_sbr (opt-in) fuses split. A split that is not
+        // being fused still needs the legacy polarity fixup below.
+        bool fusePred  = gVortexFusedDivergence && isPred;
+        bool fuseSplit = gVortexFuseSplitBranch && isSplit;
+        bool doFuse = fusePred || fuseSplit;
+
+        // Legacy polarity fixup only touches split; fused fusion folds pred/split.
+        if (!isSplit && !fusePred)
           continue;
 
         // find the corresponding branch instruction
@@ -1735,48 +1851,146 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
 
         if (MII_br == MIIEnd
          || MII_br->getOpcode() == RISCV::PseudoBR) {
-          // if a join instruction is found in same or proceeding fallthrough blocks,
-          // that means the protected branch was removed during optimization passes
-          // we can safely remove the left-out split and join instructions
-          MachineBasicBlock::iterator MII_join;
-          if (FindNextJoin(&MII_join, std::next(MII), MBB)) {
-            if (_MII == MII_join) {
-              ++_MII;
+          // Split whose protected branch was removed during optimization: if a
+          // join is found in the same/fallthrough block, drop the orphaned
+          // split+join. (Pred has no join; a pred with no branch is a bug.)
+          if (isSplit) {
+            MachineBasicBlock::iterator MII_join;
+            if (FindNextJoin(&MII_join, std::next(MII), MBB)) {
+              if (_MII == MII_join) {
+                ++_MII;
+              }
+              MII_join->eraseFromParent();
+              MI.eraseFromParent();
+              LLVM_DEBUG(dbgs() << "*** VX: Vortex: cleanup removed branches!\n");
+              Changed = true;
+              continue;
             }
-            MII_join->eraseFromParent();
-            MI.eraseFromParent();
-            LLVM_DEBUG(dbgs() << "*** VX: Vortex: cleanup removed branches!\n");
-            Changed = true;
-            continue;
           }
 
           llvm::errs() << "error: missing divergent branch!\n" << MBB << "\n";
           std::abort();
         }
 
-        // ensure Branch BEQ/BNE xi, x0
-        if (!(MII_br->getOpcode() == RISCV::BEQ
-          || MII_br->getOpcode() == RISCV::BNE)
+        // ensure Branch BEQ/BNE with an x0 operand
+        bool isBEQ = (MII_br->getOpcode() == RISCV::BEQ);
+        bool isBNE = (MII_br->getOpcode() == RISCV::BNE);
+        if ((!isBEQ && !isBNE)
         || !MII_br->getOperand(0).isReg()
         || !MII_br->getOperand(1).isReg()
-        || MII_br->getOperand(1).getReg() != RISCV::X0) {
+        || (MII_br->getOperand(0).getReg() != RISCV::X0
+         && MII_br->getOperand(1).getReg() != RISCV::X0)) {
           llvm::errs() << "error: unsupported divergent branch!\n" << MBB << "\n";
           std::abort();
         }
 
-        // ensure branch opcode match
-        if (MII_br->getOpcode() == RISCV::BEQ) {
-          switch (MI.getOpcode()) {
-          case RISCV::VX_SPLIT:
-            MI.setDesc(TII->get(RISCV::VX_SPLIT_N));
-            break;
-          case RISCV::VX_SPLIT_N:
-            MI.setDesc(TII->get(RISCV::VX_SPLIT));
-            break;
+        // --- Legacy path (this op not being fused): split polarity swap only. ---
+        if (!doFuse) {
+          if (isSplit && isBEQ && MII_br->getOperand(1).getReg() == RISCV::X0) {
+            switch (MI.getOpcode()) {
+            case RISCV::VX_SPLIT:   MI.setDesc(TII->get(RISCV::VX_SPLIT_N)); break;
+            case RISCV::VX_SPLIT_N: MI.setDesc(TII->get(RISCV::VX_SPLIT));   break;
+            }
+            LLVM_DEBUG(dbgs() << "*** VX: Vortex: fixed predicate opcode!\n");
+            Changed = true;
           }
-          LLVM_DEBUG(dbgs() << "*** VX: Vortex: fixed predicate opcode!\n");
-          Changed = true;
           continue;
+        }
+
+        // --- Fused path (SCS): rewrite {pred|split} + BEQ/BNE -> vx_pbr/vx_sbr. ---
+        Register condReg = (MII_br->getOperand(1).getReg() == RISCV::X0)
+                         ? MII_br->getOperand(0).getReg()
+                         : MII_br->getOperand(1).getReg();
+        MachineBasicBlock *T = MII_br->getOperand(2).getMBB();
+        bool neg = (MI.getOpcode() == RISCV::VX_SPLIT_N
+                 || MI.getOpcode() == RISCV::VX_PRED_N);
+
+        // keep = pred-kept set. Base cc compares condReg vs x0.
+        VXFusedCC cc = neg ? VXCC_EQ : VXCC_NE;
+        Register opA = condReg, opB = RISCV::X0;
+
+        // Opportunistically absorb a reg-reg slt/sltu feeding condReg.
+        Register sA, sB; bool sU = false;
+        MachineInstr *setcc = findAbsorbableSetcc(MBB, MII_br, condReg, sA, sB, sU, TRI);
+        if (setcc && fusedRegDeadAfter(MBB, MII_br, condReg, TRI)) {
+          // condReg == (sA < sB) [unsigned sU]; keep = condReg ^ neg.
+          cc  = sU ? (neg ? VXCC_GEU : VXCC_LTU) : (neg ? VXCC_GE : VXCC_LT);
+          opA = sA; opB = sB;
+        } else {
+          setcc = nullptr; // do not delete a shared/complex setcc
+        }
+
+        // `cc` now computes keep == pred-kept (taken(cc) == the kept set). The
+        // branch polarity is NOT folded into cc; it only decides where the kept
+        // lanes go. keep -> the legacy taken target T iff (neg == isBEQ):
+        //   pred + bnez  (neg=0,BNE): keep=(cond!=0)=taken -> T
+        //   pred_n+ beqz (neg=1,BEQ): keep=(cond==0)=taken -> T
+        //   pred_n+ bnez / pred+beqz : keep is the NOT-taken set -> fall-through
+        MachineBasicBlock *other = nullptr;
+        for (auto *S : MBB.successors())
+          if (S != T) { other = S; break; }
+        bool keptToT = (neg == isBEQ);
+        MachineBasicBlock *target = keptToT ? T : (other ? other : T);
+
+        unsigned fusedOp = getFusedOpcode(isSplit, cc);
+        auto DL = MII_br->getDebugLoc();
+        BuildMI(MBB, MII_br, DL, TII->get(fusedOp))
+            .addReg(opA)
+            .addReg(opB)
+            .addMBB(target);
+        if (!keptToT && other) {
+          // keep lanes branch to the fall-through block; the non-kept lanes must
+          // still reach T, so append an unconditional jump to it.
+          BuildMI(MBB, MII_br, DL, TII->get(RISCV::PseudoBR)).addMBB(T);
+        }
+
+        // Erase the branch, the divergence op, and (if absorbed) the setcc.
+        if (_MII == MachineBasicBlock::instr_iterator(MII_br))
+          ++_MII;
+        MII_br->eraseFromParent();
+        MI.eraseFromParent();
+        if (setcc) {
+          if (_MII == MachineBasicBlock::instr_iterator(setcc))
+            ++_MII;
+          setcc->eraseFromParent();
+        }
+        LLVM_DEBUG(dbgs() << "*** VX: Vortex: fused divergence branch!\n");
+        Changed = true;
+      }
+    }
+
+    // With split fused into vx_sbr (which has no rd stack-token), every paired
+    // vx_join becomes tokenless: rs1 = x0 signals "pop the stack top by LIFO".
+    // A legacy split-token is a value-producing def and is never x0, so fused
+    // and legacy binaries coexist on one SCS core. Only when split fusion is on
+    // (pbr-only fusion leaves legacy split+join, whose tokens must stay intact).
+    if (gVortexFuseSplitBranch && Changed) {
+      for (auto& MBB : MF) {
+        for (auto& MI : MBB) {
+          if (MI.getOpcode() == RISCV::VX_JOIN && MI.getNumOperands() >= 1
+           && MI.getOperand(0).isReg() && MI.getOperand(0).getReg() != RISCV::X0) {
+            MI.getOperand(0).setReg(RISCV::X0);
+          }
+        }
+      }
+    }
+
+    // Hard invariant (SCS + fused): the fused ops must fully replace their
+    // legacy counterparts. pbr fusion => no pred survives; sbr fusion => no
+    // split survives.
+    if (gVortexFusedDivergence || gVortexFuseSplitBranch) {
+      for (auto& MBB : MF) {
+        for (auto& MI : MBB) {
+          unsigned op = MI.getOpcode();
+          bool badPred  = gVortexFusedDivergence
+                       && (op == RISCV::VX_PRED || op == RISCV::VX_PRED_N);
+          bool badSplit = gVortexFuseSplitBranch
+                       && (op == RISCV::VX_SPLIT || op == RISCV::VX_SPLIT_N);
+          if (badPred || badSplit) {
+            llvm::errs() << "error: unfused divergence op under SCS fused mode!\n"
+                         << MI << "\n" << MBB << "\n";
+            report_fatal_error("vortex: vx_split/vx_pred survived fused divergence lowering");
+          }
         }
       }
     }

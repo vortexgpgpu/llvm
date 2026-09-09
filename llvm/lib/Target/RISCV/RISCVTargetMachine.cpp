@@ -75,6 +75,23 @@ static cl::opt<VortexDivergenceArch> VortexDivergenceArchOpt(
   cl::init(VXDA_SCS));
 int gVortexDivergenceArch = VXDA_SCS;
 
+// Fuse divergence predicate/split into the compare-branch (emit vx_pbr/vx_sbr).
+// Honored ONLY under -vortex-divergence-arch=scs; inert for ipdom/its. Default
+// off during bring-up; flip to on for the SCS toolchain once SimX/RTL land.
+static cl::opt<bool> VortexFusedDivergence(
+  "vortex-fused-divergence",
+  cl::desc("SCS only: fuse vx_pred into the loop compare-branch (vx_pbr)"),
+  cl::init(false));
+int gVortexFusedDivergence = 0;
+
+// Additionally fuse divergent branch/select splits into vx_sbr (tokenless join).
+// Off by default (stack reconvergence still under validation); implies fused.
+static cl::opt<bool> VortexFuseSplitBranch(
+  "vortex-fuse-split-branch",
+  cl::desc("SCS only: also fuse vx_split into the compare-branch (vx_sbr)"),
+  cl::init(false));
+int gVortexFuseSplitBranch = 0;
+
 // FIXME: Unify control over GlobalMerge.
 static cl::opt<cl::boolOrDefault>
     EnableGlobalMerge("riscv-enable-global-merge", cl::Hidden,
@@ -227,6 +244,12 @@ RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
    && VortexBranchDivergenceMode != 0) {
    gVortexBranchDivergenceMode = VortexBranchDivergenceMode;
    gVortexDivergenceArch = VortexDivergenceArchOpt;
+   // SCS-only fused divergence branches (vx_pbr/vx_sbr). The arch gate is the
+   // hard requirement; the flags are the rollout/A-B knobs within SCS. Fusing
+   // the split (vx_sbr) implies the loop-predicate fusion (vx_pbr).
+   gVortexFuseSplitBranch = (VortexFuseSplitBranch && gVortexDivergenceArch == VXDA_SCS);
+   gVortexFusedDivergence = ((VortexFusedDivergence || gVortexFuseSplitBranch)
+                             && gVortexDivergenceArch == VXDA_SCS);
    // ITS executes plain divergent branches on per-thread PCs; a reducible but
    // unstructured CFG is legal there, so generic CodeGen is not constrained.
    setRequiresStructuredCFG(gVortexDivergenceArch != VXDA_ITS);

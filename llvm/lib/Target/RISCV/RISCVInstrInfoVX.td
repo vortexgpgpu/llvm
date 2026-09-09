@@ -71,6 +71,35 @@ def VX_ROP : RVInstR4<0, 1, RISCV_CUSTOM1, (outs), (ins GPR:$rs1, GPR:$rs2, GPR:
 
 }
 
+// SCS-only fused divergence branches. A single B-type compare-branch that
+// replaces the setcc + vx_pred|vx_split + conditional-branch triple. funct3
+// reuses the standard branch condition encodings (eq/ne/lt/ge/ltu/geu). These
+// are emitted only by the SCS fusion in VortexBranchDivergence2 (gated on
+// gVortexFusedDivergence && gVortexDivergenceArch == VXDA_SCS); there are no
+// intrinsic/ISel patterns for them. They carry a real divergence side effect,
+// hence hasSideEffects=1.
+//   vx_pbr.<cc>  (CUSTOM2/0x5B): divergent-loop predicate-branch (replaces vx_pred)
+//   vx_sbr.<cc>  (CUSTOM3/0x7B): divergent-branch split-branch (replaces vx_split)
+let hasSideEffects = 1, mayLoad = 0, mayStore = 0, isBranch = 1, isTerminator = 1 in {
+class VXDvgBranch<bits<3> funct3, RISCVOpcode opcode, string opcodestr>
+    : RVInstB<funct3, opcode, (outs), (ins GPR:$rs1, GPR:$rs2, simm13_lsb0:$imm12),
+              opcodestr, "$rs1, $rs2, $imm12">, Sched<[]>;
+
+def VX_PBR_EQ  : VXDvgBranch<0b000, RISCV_CUSTOM2, "vx_pbr.eq">;
+def VX_PBR_NE  : VXDvgBranch<0b001, RISCV_CUSTOM2, "vx_pbr.ne">;
+def VX_PBR_LT  : VXDvgBranch<0b100, RISCV_CUSTOM2, "vx_pbr.lt">;
+def VX_PBR_GE  : VXDvgBranch<0b101, RISCV_CUSTOM2, "vx_pbr.ge">;
+def VX_PBR_LTU : VXDvgBranch<0b110, RISCV_CUSTOM2, "vx_pbr.ltu">;
+def VX_PBR_GEU : VXDvgBranch<0b111, RISCV_CUSTOM2, "vx_pbr.geu">;
+
+def VX_SBR_EQ  : VXDvgBranch<0b000, RISCV_CUSTOM3, "vx_sbr.eq">;
+def VX_SBR_NE  : VXDvgBranch<0b001, RISCV_CUSTOM3, "vx_sbr.ne">;
+def VX_SBR_LT  : VXDvgBranch<0b100, RISCV_CUSTOM3, "vx_sbr.lt">;
+def VX_SBR_GE  : VXDvgBranch<0b101, RISCV_CUSTOM3, "vx_sbr.ge">;
+def VX_SBR_LTU : VXDvgBranch<0b110, RISCV_CUSTOM3, "vx_sbr.ltu">;
+def VX_SBR_GEU : VXDvgBranch<0b111, RISCV_CUSTOM3, "vx_sbr.geu">;
+}
+
 def VX_MOV : Pseudo<(outs GPR:$dst), (ins GPR:$src), [], "vx_mov", "$dst, $src"> {}
 
 def CSR_NT : SysReg<"nt", 0xFC0>;
