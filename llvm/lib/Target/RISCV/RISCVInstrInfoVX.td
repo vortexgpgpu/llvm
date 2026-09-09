@@ -42,6 +42,22 @@ def VX_PRED_N : RVInstR<0, 5, RISCV_CUSTOM0, (outs), (ins GPR:$rs1, GPR:$rs2), "
     let rd = 1;
 }
 
+def VX_YIELD : RVInstR<5, 0, RISCV_CUSTOM0, (outs), (ins), "vx_yield", "">, Sched<[]> {
+    let rd  = 0;
+    let rs1 = 0;
+    let rs2 = 0;
+}
+
+def VX_BAR_ADD : RVInstR<6, 0, RISCV_CUSTOM0, (outs), (ins uimm5:$rs1), "vx_bar_add", "$rs1">, Sched<[]> {
+    let rd  = 0;
+    let rs2 = 0;
+}
+
+def VX_BAR_WAIT : RVInstR<6, 1, RISCV_CUSTOM0, (outs), (ins uimm5:$rs1), "vx_bar_wait", "$rs1">, Sched<[]> {
+    let rd  = 0;
+    let rs2 = 0;
+}
+
 def VX_RAST : RVInstR<1, 0, RISCV_CUSTOM0, (outs GPR:$rd), (ins), "vx_rast", "">, Sched<[]> {
     let rs1 = 0;
     let rs2 = 0;
@@ -111,3 +127,7 @@ def : Pat<(int_riscv_vx_mov_i64 GPR:$src), (VX_MOV GPR:$src)>;
 
 def : Pat<(int_riscv_vx_bar_i32 GPR:$rs1, GPR:$rs2), (VX_BAR GPR:$rs1, GPR:$rs2)>;
 def : Pat<(int_riscv_vx_bar_i64 GPR:$rs1, GPR:$rs2), (VX_BAR GPR:$rs1, GPR:$rs2)>;
+
+def : Pat<(int_riscv_vx_yield), (VX_YIELD)>;
+def : Pat<(int_riscv_vx_bar_add timm:$rs1), (VX_BAR_ADD timm:$rs1)>;
+def : Pat<(int_riscv_vx_bar_wait timm:$rs1), (VX_BAR_WAIT timm:$rs1)>;

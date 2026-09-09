@@ -125,6 +125,16 @@ let TargetPrefix = "riscv" in {
   defm int_riscv_vx_mov   : VortexD1S1Intrinsics;
   defm int_riscv_vx_bar  : VortexD0S2Intrinsics;
 
+  // Convergence barriers (ITS divergence architecture); the barrier id is a
+  // 5-bit immediate encoded in the instruction's rs1 field.
+  def int_riscv_vx_bar_add : Intrinsic<[], [llvm_i32_ty],
+      [IntrNoMem, IntrHasSideEffects, IntrConvergent, IntrWillReturn, ImmArg<ArgIndex<0>>]>;
+  def int_riscv_vx_bar_wait : Intrinsic<[], [llvm_i32_ty],
+      [IntrNoMem, IntrHasSideEffects, IntrConvergent, IntrWillReturn, ImmArg<ArgIndex<0>>]>;
+  // Threadsplit vx_yield: deschedule the running split (no operands).
+  def int_riscv_vx_yield : Intrinsic<[], [],
+      [IntrNoMem, IntrHasSideEffects, IntrConvergent, IntrWillReturn]>;
+
 } // TargetPrefix = "riscv"
 
 //===----------------------------------------------------------------------===//

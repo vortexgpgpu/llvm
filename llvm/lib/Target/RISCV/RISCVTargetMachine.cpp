@@ -62,6 +62,19 @@ static cl::opt<int> VortexKernelSchedulerMode(
   cl::desc("Set Vortex Kernel Scheduler Mode"),
   cl::init(0));
 
+// Which divergence architecture the vortex passes generate code for. This is
+// orthogonal to -vortex-branch-divergence, which remains the master enable /
+// structurization-aggressiveness knob.
+static cl::opt<VortexDivergenceArch> VortexDivergenceArchOpt(
+  "vortex-divergence-arch",
+  cl::desc("Set Vortex divergence architecture"),
+  cl::values(
+    clEnumValN(VXDA_IPDOM,  "ipdom",  "baseline IPDOM split/join"),
+    clEnumValN(VXDA_TSPLIT, "tsplit", "threadsplit: split/join + vx_yield on blocking loops"),
+    clEnumValN(VXDA_ITS,    "its",    "per-thread-PC convergence barriers (vx_bar_add/vx_bar_wait)")),
+  cl::init(VXDA_TSPLIT));
+int gVortexDivergenceArch = VXDA_TSPLIT;
+
 // FIXME: Unify control over GlobalMerge.
 static cl::opt<cl::boolOrDefault>
     EnableGlobalMerge("riscv-enable-global-merge", cl::Hidden,
@@ -213,7 +226,10 @@ RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
   if (FS.contains("+xvortex")
    && VortexBranchDivergenceMode != 0) {
    gVortexBranchDivergenceMode = VortexBranchDivergenceMode;
-   setRequiresStructuredCFG(true);
+   gVortexDivergenceArch = VortexDivergenceArchOpt;
+   // ITS executes plain divergent branches on per-thread PCs; a reducible but
+   // unstructured CFG is legal there, so generic CodeGen is not constrained.
+   setRequiresStructuredCFG(gVortexDivergenceArch != VXDA_ITS);
   }
 
   if (TT.isOSFuchsia() && !TT.isArch64Bit())
@@ -536,7 +552,8 @@ bool RISCVPassConfig::addPreISel() {
     addPass(createUnifyLoopExitsPass());
     addPass(createVortexDivergenceAnalysis0Pass());
     addPass(createVortexBranchDivergence0Pass());
-    addPass(createStructurizeCFGPass(true, (gVortexBranchDivergenceMode == 1)));
+    if (gVortexDivergenceArch != VXDA_ITS)
+      addPass(createStructurizeCFGPass(true, (gVortexBranchDivergenceMode == 1)));
     addPass(createVortexDivergenceAnalysis0Pass());
     addPass(createVortexBranchDivergence1Pass(gVortexBranchDivergenceMode));
     addPass(createVortexDivergenceAnalysis1Pass());

@@ -13,6 +13,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "RISCV.h"
+#include "VortexBranchDivergence.h"
+
+extern int gVortexBranchDivergenceMode;
 #include "RISCVInstrInfo.h"
 #include "RISCVTargetMachine.h"
 
@@ -189,8 +192,13 @@ bool RISCVExpandPseudo::expandCCOp(MachineBasicBlock &MBB,
   auto CC = static_cast<RISCVCC::CondCode>(MI.getOperand(3).getImm());
   CC = RISCVCC::getOppositeBranchCondition(CC);
 
-  llvm::errs() << "error: unimplemented divergent codegen found!\n";
-  std::abort();
+  // Split/join divergence modes cannot serialize a CC-op reaching pseudo
+  // expansion (VortexBranchDivergence2 has already run); ITS executes it as an
+  // ordinary per-thread branch, so the standard expansion below is legal there.
+  if (gVortexBranchDivergenceMode != 0 && gVortexDivergenceArch != VXDA_ITS) {
+    llvm::errs() << "error: unimplemented divergent codegen found!\n";
+    std::abort();
+  }
 
   // Insert branch instruction.
   BuildMI(MBB, MBBI, DL, TII->getBrCond(CC))

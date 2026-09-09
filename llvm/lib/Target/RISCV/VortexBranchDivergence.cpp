@@ -78,6 +78,18 @@ static cl::opt<unsigned> VortexMaxDivergenceBBs(
              "basic blocks than this (worst-case exponential complexity)"),
     cl::init(100));
 
+static cl::opt<unsigned> VortexITSNumBarriers(
+    "vortex-its-num-barriers",
+    cl::desc("Number of per-warp convergence barriers available to the ITS "
+             "divergence architecture (must match VX_CFG_ITS_NUM_BARRIERS)"),
+    cl::init(8));
+
+static cl::opt<bool> VortexITSYield(
+    "vortex-its-yield",
+    cl::desc("Emit vx_yield on blocking-loop back-edges under the ITS "
+             "divergence architecture (must match VX_CFG_ITS_YIELD_ENABLE)"),
+    cl::init(true));
+
 namespace vortex {
 
 class NamePrinter {
@@ -448,6 +460,8 @@ private:
 
   void processLoops(LLVMContext* context, Function* function);
 
+  void processITS(LLVMContext* context, Function* function, PostDominatorTree &PDT, LoopInfo &LI);
+
   using StackEntry = std::pair<BasicBlock *, Value *>;
   using StackVector = SmallVector<StackEntry, 16>;
 
@@ -472,6 +486,9 @@ private:
   Function *split_n_func_;
   Function *join_func_;
   Function *mov_func_;
+  Function *yield_func_;
+  Function *bar_add_func_;
+  Function *bar_wait_func_;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -971,7 +988,11 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
 
   bool hasStdExtZicond = ST.hasStdExtZicond();
 
-  if (!hasStdExtZicond) {
+  // Under ITS, divergent selects and min/max execute unchanged on per-thread
+  // PCs; unswitching them into branches is pure pessimization.
+  bool unswitchDivergentOps = !hasStdExtZicond && (gVortexDivergenceArch != VXDA_ITS);
+
+  if (unswitchDivergentOps) {
     // Lower Select instructions into standard if-then-else branches
     SmallVector<SelectInst*, 4> selects;
 
@@ -998,7 +1019,7 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
     }
   }
 
-  if (!hasStdExtZicond) {
+  if (unswitchDivergentOps) {
     // Lower Min/Max intrinsics into standard if-then-else branches
     SmallVector<MinMaxIntrinsic*, 4> MMs;
 
@@ -1211,6 +1232,10 @@ void VortexBranchDivergence1::initialize(Function &F) {
     mov_func_   = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_mov_i32);
   }
 
+  yield_func_    = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_yield);
+  bar_add_func_  = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_bar_add);
+  bar_wait_func_ = Intrinsic::getDeclaration(&M, Intrinsic::riscv_vx_bar_wait);
+
   namePrinter_.init(&F);
   replaceSuccessor_.init(&F);
 
@@ -1316,19 +1341,27 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
   if (!loops_.empty() || !div_blocks_.empty()) {
     LLVM_DEBUG(dbgs() << "*** VX: before changes!\n" << F << "\n");
 
-    // process the loop
-    // This should be done first such that loop analysis is not tempered
-    if (!loops_.empty()) {
-      this->processLoops(&Context, &F);
+    if (gVortexDivergenceArch == VXDA_ITS) {
+      // ITS: divergent branches and loop exits execute unchanged on per-thread
+      // PCs; only convergence barriers are inserted around them.
+      this->processITS(&Context, &F, PDT, LI);
       loops_.clear();
-      // update PDT
-      PDT.recalculate(F);
-    }
-
-    // process branches
-    if (!div_blocks_.empty()) {
-      this->processBranches(&Context, &F, PDT);
       div_blocks_.clear();
+    } else {
+      // process the loop
+      // This should be done first such that loop analysis is not tempered
+      if (!loops_.empty()) {
+        this->processLoops(&Context, &F);
+        loops_.clear();
+        // update PDT
+        PDT.recalculate(F);
+      }
+
+      // process branches
+      if (!div_blocks_.empty()) {
+        this->processBranches(&Context, &F, PDT);
+        div_blocks_.clear();
+      }
     }
 
     changed = true;
@@ -1351,6 +1384,35 @@ bool VortexBranchDivergence1::runOnFunction(Function &F) {
   return changed;
 }
 
+// A loop that performs an atomic RMW (e.g. a spin-lock acquire) may block on
+// a sibling lane and needs a yield point for forward progress.
+static bool loopHasBlockingOp(Loop* loop) {
+  for (auto bb : loop->blocks()) {
+    for (auto &I : *bb) {
+      // native LLVM atomics
+      if (isa<AtomicRMWInst>(I) || isa<AtomicCmpXchgInst>(I)) {
+        return true;
+      }
+      // OpenCL atomic builtins lower to a call (e.g. _cl_atomic_xchg) and an
+      // inline-asm amo*; treat either as a potential blocking acquisition.
+      if (auto *CB = dyn_cast<CallBase>(&I)) {
+        if (auto *IA = dyn_cast<InlineAsm>(CB->getCalledOperand())) {
+          std::string s = IA->getAsmString();
+          if (s.find("amo") != std::string::npos || s.find("lr.") != std::string::npos) {
+            return true;
+          }
+        }
+        if (auto *F = CB->getCalledFunction()) {
+          if (F->getName().contains("atomic")) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
 void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* function) {
   DenseSet<const BasicBlock *> stub_blocks;
 
@@ -1360,29 +1422,10 @@ void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* funct
     auto header = loop->getHeader();
     assert(header);
 
-    // SCS: a loop that performs an atomic RMW (e.g. a spin-lock acquire) may
-    // block on a sibling lane; emit vx_yield on its back-edge so a blocked
-    // subgroup deschedules and lets the lock holder run. Normal (lane-
-    // independent) loops are left yield-free to avoid scheduling overhead.
-    bool loop_blocks = false;
-    for (auto bb : loop->blocks()) {
-      for (auto &I : *bb) {
-        // native LLVM atomics
-        if (isa<AtomicRMWInst>(I) || isa<AtomicCmpXchgInst>(I)) { loop_blocks = true; break; }
-        // OpenCL atomic builtins lower to a call (e.g. _cl_atomic_xchg) and an
-        // inline-asm amo*; treat either as a potential blocking acquisition.
-        if (auto *CB = dyn_cast<CallBase>(&I)) {
-          if (auto *IA = dyn_cast<InlineAsm>(CB->getCalledOperand())) {
-            std::string s = IA->getAsmString();
-            if (s.find("amo") != std::string::npos || s.find("lr.") != std::string::npos) { loop_blocks = true; break; }
-          }
-          if (auto *F = CB->getCalledFunction()) {
-            if (F->getName().contains("atomic")) { loop_blocks = true; break; }
-          }
-        }
-      }
-      if (loop_blocks) break;
-    }
+    // SCS: blocked spinners in such a loop deschedule via vx_yield on the
+    // back-edge so the lock holder runs; lane-independent loops are left
+    // yield-free to avoid scheduling overhead.
+    bool loop_blocks = loopHasBlockingOp(loop);
 
     auto preheader = loop->getLoopPreheader();
     assert(preheader);
@@ -1436,10 +1479,9 @@ void VortexBranchDivergence1::processLoops(LLVMContext* context, Function* funct
           if (!loop->contains(succ0)) {
             CallInst::Create(pred_n_func_, {cond, tmask}, "", branch);
             // SCS: spinners (lanes kept active by pred_n) yield on the back-edge.
-            if (loop_blocks) {
-              auto yield_ty = FunctionType::get(Type::getVoidTy(*context), false);
-              auto yield_asm = InlineAsm::get(yield_ty, ".insn r 0x0B, 0, 5, x0, x0, x0", "~{memory}", /*hasSideEffects=*/true);
-              CallInst::Create(yield_asm, "", branch);
+            // Threadsplit-only: the ipdom baseline has no yield semantics.
+            if (loop_blocks && gVortexDivergenceArch == VXDA_TSPLIT) {
+              CallInst::Create(yield_func_, "", branch);
               LLVM_DEBUG(dbgs() << "*** VX: insert vx_yield on blocking-loop back-edge: " << namePrinter_.BBName(exiting_block) << "\n");
             }
           } else {
@@ -1504,6 +1546,118 @@ void VortexBranchDivergence1::processBranches(LLVMContext* context, Function* fu
       bool found = replaceSuccessor_.replaceSuccessor(pred, ipdom, stub);
       if (!found) {
         std::abort();
+      }
+    }
+  }
+}
+
+// ITS: insert convergence barriers around divergent control flow. Divergent
+// branches and loop exits are left unchanged (per-thread PCs execute them
+// directly); each divergent region gets a vx_bar_add at its entry and a
+// vx_bar_wait at its reconvergence point. Barrier ids are allocated statically
+// by nesting depth: nested regions get deeper ids, disjoint regions share one —
+// safe under equality-release semantics (sharing only couples their release
+// conservatively, it can never deadlock a region whose participants all reach
+// a wait).
+void VortexBranchDivergence1::processITS(LLVMContext* context, Function* function,
+                                         PostDominatorTree &PDT, LoopInfo &LI) {
+  (void)context;
+  (void)LI;
+
+  struct its_region_t {
+    Loop*       loop;         // non-null for a divergent-exit loop region
+    BasicBlock* entry;        // loop header, or the divergent branch block
+    BasicBlock* wait_target;  // unused for loops; the ipdom for branches
+    unsigned    bid;
+  };
+  std::vector<its_region_t> regions;
+
+  // innermost-first, matching processLoops/processBranches emission order
+  for (auto it = loops_.rbegin(), ite = loops_.rend(); it != ite; ++it) {
+    regions.push_back({*it, (*it)->getHeader(), nullptr, 0});
+  }
+  for (auto it = div_blocks_.rbegin(), ite = div_blocks_.rend(); it != ite; ++it) {
+    auto block = *it;
+    auto branch = dyn_cast<BranchInst>(block->getTerminator());
+    assert(branch);
+    auto ipdom = PDT.findNearestCommonDominator(branch->getSuccessor(0), branch->getSuccessor(1));
+    if (ipdom == nullptr) {
+      llvm::errs() << "error: divergent branch with no IPDOM: " << namePrinter_.BBName(block) << "\n";
+      std::abort();
+    }
+    regions.push_back({nullptr, block, ipdom, 0});
+  }
+
+  DominatorTree DT(*function);
+
+  // region containment: does r1 strictly enclose r2's entry?
+  auto contains = [&](const its_region_t& r1, const its_region_t& r2) {
+    if (&r1 == &r2)
+      return false;
+    if (r1.loop != nullptr)
+      return r1.loop->contains(r2.entry);
+    if (r2.entry == r1.wait_target)
+      return false; // sequential-after, not nested
+    return DT.dominates(r1.entry, r2.entry) && PDT.dominates(r1.wait_target, r2.entry);
+  };
+
+  for (auto& r : regions) {
+    unsigned depth = 0;
+    for (auto& other : regions) {
+      if (contains(other, r))
+        ++depth;
+    }
+    if (depth >= VortexITSNumBarriers) {
+      report_fatal_error("vortex ITS: divergence nesting in '" + function->getName() +
+                         "' exceeds available convergence barriers (" +
+                         Twine(VortexITSNumBarriers) + ")");
+    }
+    r.bid = depth;
+  }
+
+  auto Int32Ty = Type::getInt32Ty(function->getContext());
+
+  for (auto& r : regions) {
+    auto bid = ConstantInt::get(Int32Ty, r.bid);
+    if (r.loop != nullptr) {
+      // participation at loop entry, arrival at every dedicated exit block
+      auto preheader = r.loop->getLoopPreheader();
+      assert(preheader);
+      CallInst::Create(bar_add_func_, {bid}, "", preheader->getTerminator());
+      LLVM_DEBUG(dbgs() << "*** VX: ITS bar_add(" << r.bid << ") in loop preheader: " << namePrinter_.BBName(preheader) << "\n");
+      SmallVector<BasicBlock*, 8> exit_blocks;
+      r.loop->getUniqueExitBlocks(exit_blocks);
+      for (auto exit_block : exit_blocks) {
+        CallInst::Create(bar_wait_func_, {bid}, "", &*exit_block->getFirstInsertionPt());
+        LLVM_DEBUG(dbgs() << "*** VX: ITS bar_wait(" << r.bid << ") in loop exit: " << namePrinter_.BBName(exit_block) << "\n");
+      }
+      // Blocking loops need a yield point for forward progress: a spinner
+      // group parks each iteration so a blocked-on holder becomes schedulable.
+      if (VortexITSYield && loopHasBlockingOp(r.loop)) {
+        SmallVector<BasicBlock*, 4> latches;
+        r.loop->getLoopLatches(latches);
+        for (auto latch : latches) {
+          CallInst::Create(yield_func_, "", latch->getTerminator());
+          LLVM_DEBUG(dbgs() << "*** VX: ITS vx_yield on blocking-loop back-edge: " << namePrinter_.BBName(latch) << "\n");
+        }
+      }
+    } else {
+      // participation before the divergent branch, arrival in a stub that
+      // intercepts every path from the region into the ipdom
+      auto branch = r.entry->getTerminator();
+      CallInst::Create(bar_add_func_, {bid}, "", branch);
+      auto stub = BasicBlock::Create(function->getContext(), "bar_wait_stub", function, r.wait_target);
+      auto stub_br = BranchInst::Create(r.wait_target, stub);
+      CallInst::Create(bar_wait_func_, {bid}, "", stub_br);
+      LLVM_DEBUG(dbgs() << "*** VX: ITS bar_add(" << r.bid << ") at " << namePrinter_.BBName(r.entry)
+                        << ", bar_wait stub before " << namePrinter_.BBName(r.wait_target) << "\n");
+      std::vector<BasicBlock*> preds;
+      FindSuccessor(r.entry, r.wait_target, preds);
+      for (auto pred : preds) {
+        bool found = replaceSuccessor_.replaceSuccessor(pred, r.wait_target, stub);
+        if (!found) {
+          std::abort();
+        }
       }
     }
   }

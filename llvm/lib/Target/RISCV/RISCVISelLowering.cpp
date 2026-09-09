@@ -47,6 +47,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
+#include "VortexBranchDivergence.h"
 
 using namespace llvm;
 
@@ -55,6 +56,12 @@ using namespace llvm;
 STATISTIC(NumTailCalls, "Number of tail calls");
 
 extern int gVortexBranchDivergenceMode;
+
+// True when vortex divergence codegen must serialize divergent selects through
+// split/join; the ITS architecture executes them on per-thread PCs instead.
+static inline bool vortexNeedsSplitJoin() {
+  return gVortexBranchDivergenceMode != 0 && gVortexDivergenceArch != VXDA_ITS;
+}
 
 static cl::opt<unsigned> ExtensionMaxWebSize(
     DEBUG_TYPE "-ext-max-web-size", cl::Hidden,
@@ -19708,7 +19715,7 @@ EmitLoweredCascadedSelect(MachineInstr &First, MachineInstr &Second,
   Register DestReg = Second.getOperand(0).getReg();
   Register Op2Reg4 = Second.getOperand(4).getReg();
 
-  if (Subtarget.hasVendorXVortex() && gVortexBranchDivergenceMode != 0) {
+  if (Subtarget.hasVendorXVortex() && vortexNeedsSplitJoin()) {
     MachineBasicBlock *SinkMBB1 = F->CreateMachineBasicBlock(LLVM_BB);
     // SinkMBB1 must be laid out immediately before SinkMBB: SecondMBB is
     // an empty block that falls through to SinkMBB1, and SinkMBB1 (ending
@@ -19911,7 +19918,7 @@ static MachineBasicBlock *emitSelectPseudo(MachineInstr &MI,
   HeadMBB->addSuccessor(IfFalseMBB);
   HeadMBB->addSuccessor(TailMBB);
 
-  if (Subtarget.hasVendorXVortex() && gVortexBranchDivergenceMode != 0 &&
+  if (Subtarget.hasVendorXVortex() && vortexNeedsSplitJoin() &&
       MI.getOperand(2).isReg()) {
     Register CCReg, DVReg;
     InsertVXSplit(&CCReg, &DVReg, CC, LHS, RHS, *HeadMBB, HeadMBB->end(), DL, TII);

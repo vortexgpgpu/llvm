@@ -4,6 +4,16 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Passes/PassBuilder.h"
 
+// Divergence architecture selected by -vortex-divergence-arch and latched into
+// gVortexDivergenceArch by RISCVTargetMachine when the vortex divergence
+// pipeline is enabled (+xvortex and -vortex-branch-divergence != 0).
+enum VortexDivergenceArch {
+  VXDA_IPDOM  = 0, // baseline IPDOM split/join
+  VXDA_TSPLIT = 1, // threadsplit: split/join + vx_yield on blocking loops
+  VXDA_ITS    = 2, // per-thread-PC convergence barriers (vx_bar_add/vx_bar_wait)
+};
+extern int gVortexDivergenceArch;
+
 namespace vortex {
 using namespace llvm;
 
