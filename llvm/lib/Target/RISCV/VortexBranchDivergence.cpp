@@ -1821,7 +1821,29 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
     }
     break;
 
-  case 1:
+  case 1: {
+    // Guard (SCS fused split-branch): vx_sbr keeps its tokenless join balanced
+    // with a fixed-depth hardware marker stack (SBR_MARKER_DEPTH) atop a
+    // push-only-on-divergence IPDOM stack. Static split-nesting can never exceed
+    // the number of vx_split in a function, so if that count could exceed the
+    // marker depth we conservatively leave THIS function entirely on legacy
+    // split/join (always correct, just less fused). Realistic kernels are far
+    // below the bound, so this never triggers in practice.
+    static constexpr unsigned kSbrMarkerDepth = 32;
+    bool allowSplitFusion = gVortexFuseSplitBranch;
+    if (allowSplitFusion) {
+      unsigned splitCount = 0;
+      for (auto& MBB : MF)
+        for (auto& MI : MBB)
+          if (MI.getOpcode() == RISCV::VX_SPLIT || MI.getOpcode() == RISCV::VX_SPLIT_N)
+            ++splitCount;
+      if (splitCount > kSbrMarkerDepth) {
+        allowSplitFusion = false;
+        LLVM_DEBUG(dbgs() << "*** VX: split-fusion disabled for " << MF.getName()
+                          << " (" << splitCount << " splits > marker depth "
+                          << kSbrMarkerDepth << "); using legacy split/join.\n");
+      }
+    }
     for (auto& MBB : MF) {
       for (auto _MII = MBB.instr_begin(), MIIEnd = MBB.instr_end(); _MII != MIIEnd;) {
         auto MII = _MII++;
@@ -1835,7 +1857,7 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
         // vx_pbr fuses pred; vx_sbr (opt-in) fuses split. A split that is not
         // being fused still needs the legacy polarity fixup below.
         bool fusePred  = gVortexFusedDivergence && isPred;
-        bool fuseSplit = gVortexFuseSplitBranch && isSplit;
+        bool fuseSplit = allowSplitFusion && isSplit;
         bool doFuse = fusePred || fuseSplit;
 
         // Legacy polarity fixup only touches split; fused fusion folds pred/split.
@@ -1964,7 +1986,9 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
     // A legacy split-token is a value-producing def and is never x0, so fused
     // and legacy binaries coexist on one SCS core. Only when split fusion is on
     // (pbr-only fusion leaves legacy split+join, whose tokens must stay intact).
-    if (gVortexFuseSplitBranch && Changed) {
+    // Gated on the per-function decision: a function that fell back to legacy
+    // split/join (too deep for the marker) must keep its join tokens.
+    if (allowSplitFusion && Changed) {
       for (auto& MBB : MF) {
         for (auto& MI : MBB) {
           if (MI.getOpcode() == RISCV::VX_JOIN && MI.getNumOperands() >= 1
@@ -1984,7 +2008,9 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
           unsigned op = MI.getOpcode();
           bool badPred  = gVortexFusedDivergence
                        && (op == RISCV::VX_PRED || op == RISCV::VX_PRED_N);
-          bool badSplit = gVortexFuseSplitBranch
+          // Only enforce "no split survives" when this function actually fused
+          // splits; a deep-nesting fallback intentionally keeps legacy split/join.
+          bool badSplit = allowSplitFusion
                        && (op == RISCV::VX_SPLIT || op == RISCV::VX_SPLIT_N);
           if (badPred || badSplit) {
             llvm::errs() << "error: unfused divergence op under SCS fused mode!\n"
@@ -1995,6 +2021,7 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
       }
     }
     break;
+  }
   }
 
   if (Changed) {
