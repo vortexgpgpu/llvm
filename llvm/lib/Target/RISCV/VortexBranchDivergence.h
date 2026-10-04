@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -77,7 +78,9 @@ public:
   static void clear(const llvm::Module* M);
 
 private:
-  static llvm::DenseMap<const llvm::Function*, dv_info_t> dv_infos_;
+  /* unique_ptr values: get() hands out raw dv_info_t* that callers hold
+   * across map-growing calls; inline values would dangle on rehash. */
+  static llvm::DenseMap<const llvm::Function*, std::unique_ptr<dv_info_t>> dv_infos_;
   static llvm::sys::Mutex mutex_;
 };
 

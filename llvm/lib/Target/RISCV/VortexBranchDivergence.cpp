@@ -77,6 +77,49 @@ static cl::opt<unsigned> VortexMaxDivergenceBBs(
              "basic blocks than this (worst-case exponential complexity)"),
     cl::init(100));
 
+// The size guard exists for host-support/toolchain code (musl vfprintf-class
+// CFGs) where structurization is prohibitively slow and divergence is
+// impossible. In a device-program module (one that contains SIMT kernel
+// entries) skipping is NEVER safe: a divergent branch compiled as a scalar
+// warp branch silently drops lanes. Detect kernel entries via the same two
+// markers the backend honors elsewhere ("vortex-kernel" fn attribute and the
+// `vortex.kernel` global annotation), plus the SPIR kernel calling convention
+// used by OpenCL front ends.
+static bool moduleHasSIMTKernels(const Module &M) {
+  for (const Function &F : M) {
+    if (F.getCallingConv() == CallingConv::SPIR_KERNEL)
+      return true;
+    if (F.hasFnAttribute("vortex-kernel"))
+      return true;
+  }
+  const GlobalVariable *GA = M.getGlobalVariable("llvm.global.annotations");
+  if (GA && GA->hasInitializer()) {
+    if (const auto *CA = dyn_cast<ConstantArray>(GA->getInitializer())) {
+      for (const Value *Op : CA->operands()) {
+        const auto *CS = dyn_cast<ConstantStruct>(Op);
+        if (!CS || CS->getNumOperands() < 2)
+          continue;
+        const auto *StrGV =
+            dyn_cast<GlobalVariable>(CS->getOperand(1)->stripPointerCasts());
+        if (!StrGV || !StrGV->hasInitializer())
+          continue;
+        const auto *Str =
+            dyn_cast<ConstantDataArray>(StrGV->getInitializer());
+        if (Str && Str->isCString() && Str->getAsCString() == "vortex.kernel")
+          return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Size-guard predicate: skip only when the function is large AND the module
+// has no SIMT kernels (i.e. this is host-support/toolchain code).
+static bool skipDivergenceForSize(const Function &F) {
+  return F.size() > VortexMaxDivergenceBBs &&
+         !moduleHasSIMTKernels(*F.getParent());
+}
+
 namespace vortex {
 
 class NamePrinter {
@@ -652,7 +695,7 @@ bool VortexDivergenceAnalysis0::runOnModule(Module &M) {
   do {
     changed = false;
     for (auto it = funcs.rbegin(), ie = funcs.rend(); it != ie; ++it) {
-      if ((*it)->size() > VortexMaxDivergenceBBs) {
+      if (skipDivergenceForSize(**it)) {
         LLVM_DEBUG(dbgs() << "*** VX: skip large function in analysis: "
                           << (*it)->getName() << " (" << (*it)->size()
                           << " BBs)\n");
@@ -948,13 +991,21 @@ void VortexBranchDivergence0::getAnalysisUsage(AnalysisUsage &AU) const {
 bool VortexBranchDivergence0::runOnFunction(Function &F) {
   LLVM_DEBUG(dbgs() << "*** VX: VortexBranchDivergence0::runOnFunction(): " << F.getName() << "\n");
 
-  // Complexity guard — see VortexMaxDivergenceBBs at top of file. Real perf
-  // fix (NOT cosmetic): the structurization + divergence pipeline is
-  // worst-case exponential on large CFGs.
-  if (F.size() > VortexMaxDivergenceBBs) {
-    LLVM_DEBUG(dbgs() << "*** VX: skip divergence on " << F.getName()
-                      << " (" << F.size() << " BBs > "
-                      << VortexMaxDivergenceBBs << ")\n");
+  // Complexity guard — see VortexMaxDivergenceBBs at top of file. The
+  // structurization + divergence pipeline is worst-case exponential on large
+  // CFGs. Never applied to device-program modules (see moduleHasSIMTKernels)
+  // — skipping there miscompiles divergent branches. The decision is made
+  // HERE, against the pre-structurization size, and recorded as a function
+  // attribute: VBD1 must follow it exactly (structurization grows the CFG,
+  // so re-measuring the size there diverges from this verdict — processed
+  // here + skipped there emits no split/join at all and silently drops
+  // lanes on every divergent branch).
+  if (skipDivergenceForSize(F)) {
+    F.addFnAttr("vortex-divergence-skipped");
+    llvm::errs() << "warning: Vortex divergence pipeline skipped for large "
+                 << "function '" << F.getName() << "' (" << F.size()
+                 << " BBs > " << VortexMaxDivergenceBBs
+                 << "); divergent control flow in it will misexecute\n";
     return false;
   }
 
@@ -1240,13 +1291,15 @@ static void stripVxUniformMarkers(Function &F) {
 bool VortexBranchDivergence1::runOnFunction(Function &F) {
   LLVM_DEBUG(dbgs() << "*** VX: VortexBranchDivergence1::runOnFunction(): " << F.getName() << "\n");
 
-  // Complexity guard — same threshold as VBD0. Real perf fix (NOT cosmetic):
-  // StructurizeCFG was skipped on large functions; emitting split/join here
-  // without prior structurization produces dominance violations.
-  if (F.size() > VortexMaxDivergenceBBs) {
+  // Follow VBD0's recorded verdict — never re-measure the size here:
+  // structurization (run by VBD0) grows the CFG, so a fresh size check can
+  // flip the decision mid-pipeline. Processed-by-VBD0 + skipped-here would
+  // emit no split/join at all (silent lane-dropping); skipped-by-VBD0 +
+  // processed-here emits split/join without structurization (dominance
+  // violations).
+  if (F.hasFnAttribute("vortex-divergence-skipped")) {
     LLVM_DEBUG(dbgs() << "*** VX: skip divergence on " << F.getName()
-                      << " (" << F.size() << " BBs > "
-                      << VortexMaxDivergenceBBs << ")\n");
+                      << " (VBD0 verdict)\n");
     // We skip the divergence transformation, but the riscv_vx_uniform markers
     // still need stripping — leaving them in reaches ISel as "cannot select".
     stripVxUniformMarkers(F);
@@ -1704,25 +1757,38 @@ PreservedAnalyses UniformAnnotationPass::run(Function &F, FunctionAnalysisManage
 
 ///////////////////////////////////////////////////////////////////////////////
 
-llvm::DenseMap<const llvm::Function*, dv_info_t> DivergenceInfo::dv_infos_;
+llvm::DenseMap<const llvm::Function*, std::unique_ptr<dv_info_t>>
+    DivergenceInfo::dv_infos_;
 llvm::sys::Mutex DivergenceInfo::mutex_;
+
+/* dv_info_t entries are heap-allocated: get() hands out raw pointers that
+ * callers hold across further get()/setUniformInArg() calls, which insert
+ * into the map — an inline-value DenseMap would invalidate them on rehash
+ * (seen with 32+ locally-linked callees in one function). */
+static dv_info_t &dv_info_slot(
+    llvm::DenseMap<const llvm::Function *, std::unique_ptr<dv_info_t>> &m,
+    const llvm::Function *F) {
+  auto &x = m[F];
+  if (!x)
+    x.reset(new dv_info_t());
+  return *x;
+}
 
 dv_info_t* DivergenceInfo::get(const llvm::Function* F) {
   llvm::sys::ScopedLock lock(mutex_);
-  auto &x = dv_infos_[F];
-  return &x;
+  return &dv_info_slot(dv_infos_, F);
 }
 
 bool DivergenceInfo::setUniformInArg(const llvm::Function* F, const llvm::Argument* Arg, bool is_uniform) {
   llvm::sys::ScopedLock lock(mutex_);
-  return dv_infos_[F].setUniformInArg(Arg, is_uniform);
+  return dv_info_slot(dv_infos_, F).setUniformInArg(Arg, is_uniform);
 }
 
 bool DivergenceInfo::isUniformRet(const llvm::Function* F) {
   llvm::sys::ScopedLock lock(mutex_);
   auto it = dv_infos_.find(F);
   if (it != dv_infos_.end()) {
-    return it->second.isUniformRet();
+    return it->second->isUniformRet();
   }
   return false; // conservative
 }
@@ -1731,7 +1797,7 @@ bool DivergenceInfo::isUniformOutArg(const llvm::Function* F, const llvm::Argume
   llvm::sys::ScopedLock lock(mutex_);
   auto it = dv_infos_.find(F);
   if (it != dv_infos_.end()) {
-    return it->second.isUniformOutArg(Arg);
+    return it->second->isUniformOutArg(Arg);
   }
   return false; // conservative
 }
