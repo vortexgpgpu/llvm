@@ -530,8 +530,11 @@ bool RISCVPassConfig::addPreISel() {
                                   /* MergeExternalByDefault */ true));
   }
   if (gVortexBranchDivergenceMode != 0) {
-    addPass(createLowerSwitchPass());
+    // The divergence passes only split on conditional branches, so no switch
+    // may reach them; SimplifyCFG folds if/else-if chains into switches and
+    // therefore has to run before LowerSwitch, not after it.
     addPass(createCFGSimplificationPass());
+    addPass(createLowerSwitchPass());
     addPass(createLoopSimplifyPass());
     addPass(createUnifyLoopExitsPass());
     addPass(createVortexDivergenceAnalysis0Pass());
