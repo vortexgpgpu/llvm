@@ -158,8 +158,44 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
             // shuffles hits "Cannot select" (e.g. hybridsort mergeSortPass).
             ISD::VECTOR_SHUFFLE, ISD::SELECT, ISD::SELECT_CC, ISD::VSELECT,
             ISD::SETCC, ISD::CONCAT_VECTORS, ISD::EXTRACT_SUBVECTOR,
-            ISD::INSERT_SUBVECTOR})
+            ISD::INSERT_SUBVECTOR,
+            // Likewise for arithmetic/logic/conversion ops: the IR-level
+            // scalarizer handles most vector ALU, but ops materialized late
+            // (by DAG combines or non-kernel pipelines) must still legalize.
+            // Intrinsic nodes stay legal — int_riscv_vx_* route grouped
+            // values by design.
+            ISD::ADD, ISD::SUB, ISD::MUL, ISD::MULHS, ISD::MULHU, ISD::SDIV,
+            ISD::UDIV, ISD::SREM, ISD::UREM, ISD::AND, ISD::OR, ISD::XOR,
+            ISD::SHL, ISD::SRA, ISD::SRL, ISD::SMIN, ISD::SMAX, ISD::UMIN,
+            ISD::UMAX, ISD::ABS, ISD::CTLZ, ISD::CTTZ, ISD::CTPOP,
+            ISD::BSWAP, ISD::BITREVERSE, ISD::SINT_TO_FP, ISD::UINT_TO_FP,
+            ISD::FP_TO_SINT, ISD::FP_TO_UINT, ISD::TRUNCATE,
+            ISD::SIGN_EXTEND, ISD::ZERO_EXTEND, ISD::ANY_EXTEND,
+            ISD::FADD, ISD::FSUB, ISD::FMUL, ISD::FDIV, ISD::FREM,
+            ISD::FNEG, ISD::FABS, ISD::FMA, ISD::FSQRT, ISD::FCEIL,
+            ISD::FFLOOR, ISD::FTRUNC, ISD::FRINT, ISD::FNEARBYINT,
+            ISD::FROUND, ISD::FROUNDEVEN, ISD::FMINNUM, ISD::FMAXNUM,
+            ISD::FMINIMUM, ISD::FMAXIMUM, ISD::FCOPYSIGN, ISD::FEXP,
+            ISD::FEXP2, ISD::FLOG, ISD::FLOG2, ISD::FLOG10, ISD::FSIN,
+            ISD::FCOS, ISD::FPOW})
         setOperationAction(Op, VT, Expand);
+      // Narrow-element vector memory accesses (e.g. OpenCL char2/short8)
+      // reach the grouped types as truncating stores / extending loads after
+      // type promotion. XVortex has no packed narrow accesses; expand them
+      // into per-lane scalar code. Without this, `store trunc to v2i8` /
+      // `load anyext from v8i16` hit "Cannot select".
+      if (VT.isInteger()) {
+        MVT EltVT = VT.getVectorElementType();
+        for (MVT NarrowEltVT : {MVT::i8, MVT::i16, MVT::i32}) {
+          if (!NarrowEltVT.bitsLT(EltVT))
+            continue;
+          MVT MemVT = MVT::getVectorVT(NarrowEltVT, VT.getVectorElementCount());
+          setTruncStoreAction(VT, MemVT, Expand);
+          setLoadExtAction(ISD::EXTLOAD, VT, MemVT, Expand);
+          setLoadExtAction(ISD::SEXTLOAD, VT, MemVT, Expand);
+          setLoadExtAction(ISD::ZEXTLOAD, VT, MemVT, Expand);
+        }
+      }
     };
     if (Subtarget.is64Bit()) {
       SetupXVortexVT(MVT::v2i64, &RISCV::GPRG2RegClass);

@@ -681,7 +681,10 @@ InstructionCost RISCVTTIImpl::getScalarizationOverhead(
   InstructionCost Cost = BaseT::getScalarizationOverhead(
       Ty, DemandedElts, Insert, Extract, CostKind);
   std::pair<InstructionCost, MVT> LT = getTypeLegalizationCost(Ty);
-  if (Insert && !Extract && LT.first.isValid() && LT.second.isVector()) {
+  // The vslide1down refinement below is RVV-only; XVortex grouped-register
+  // vectors are legal fixed vectors with no RVV container.
+  if (Insert && !Extract && LT.first.isValid() && LT.second.isVector() &&
+      ST->hasVInstructions()) {
     if (Ty->getScalarSizeInBits() == 1) {
       auto *WideVecTy = cast<VectorType>(Ty->getWithNewBitWidth(8));
       // Note: Implicit scalar anyextend is assumed to be free since the i1
