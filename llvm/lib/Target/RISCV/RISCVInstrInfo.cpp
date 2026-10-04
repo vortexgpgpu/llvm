@@ -489,6 +489,59 @@ void RISCVInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
     return;
   }
 
+  // XVortex register groups copy element by element. Groups are aligned, so
+  // two registers of one group class either coincide or are disjoint and the
+  // element order does not matter.
+  {
+    static const unsigned GPRG4Subs[] = {
+        RISCV::sub_gpr_g4_0, RISCV::sub_gpr_g4_1, RISCV::sub_gpr_g4_2,
+        RISCV::sub_gpr_g4_3};
+    static const unsigned GPRG8Subs[] = {
+        RISCV::sub_gpr_g8_0, RISCV::sub_gpr_g8_1, RISCV::sub_gpr_g8_2,
+        RISCV::sub_gpr_g8_3, RISCV::sub_gpr_g8_4, RISCV::sub_gpr_g8_5,
+        RISCV::sub_gpr_g8_6, RISCV::sub_gpr_g8_7};
+    static const unsigned FPRG2Subs[] = {RISCV::sub_fpr32_g2_0,
+                                         RISCV::sub_fpr32_g2_1};
+    static const unsigned FPRG4Subs[] = {
+        RISCV::sub_fpr32_g4_0, RISCV::sub_fpr32_g4_1, RISCV::sub_fpr32_g4_2,
+        RISCV::sub_fpr32_g4_3};
+    static const unsigned FPRG8Subs[] = {
+        RISCV::sub_fpr32_g8_0, RISCV::sub_fpr32_g8_1, RISCV::sub_fpr32_g8_2,
+        RISCV::sub_fpr32_g8_3, RISCV::sub_fpr32_g8_4, RISCV::sub_fpr32_g8_5,
+        RISCV::sub_fpr32_g8_6, RISCV::sub_fpr32_g8_7};
+    ArrayRef<unsigned> Subs;
+    bool IsFP = false;
+    if (RISCV::GPRG4RegClass.contains(DstReg, SrcReg)) {
+      Subs = GPRG4Subs;
+    } else if (RISCV::GPRG8RegClass.contains(DstReg, SrcReg)) {
+      Subs = GPRG8Subs;
+    } else if (RISCV::FPRG2RegClass.contains(DstReg, SrcReg)) {
+      Subs = FPRG2Subs;
+      IsFP = true;
+    } else if (RISCV::FPRG4RegClass.contains(DstReg, SrcReg)) {
+      Subs = FPRG4Subs;
+      IsFP = true;
+    } else if (RISCV::FPRG8RegClass.contains(DstReg, SrcReg)) {
+      Subs = FPRG8Subs;
+      IsFP = true;
+    }
+    if (!Subs.empty()) {
+      for (unsigned Sub : Subs) {
+        MCRegister D = TRI->getSubReg(DstReg, Sub);
+        MCRegister S = TRI->getSubReg(SrcReg, Sub);
+        if (IsFP)
+          BuildMI(MBB, MBBI, DL, get(RISCV::FSGNJ_S), D)
+              .addReg(S, getKillRegState(KillSrc))
+              .addReg(S, getKillRegState(KillSrc));
+        else
+          BuildMI(MBB, MBBI, DL, get(RISCV::ADDI), D)
+              .addReg(S, getKillRegState(KillSrc))
+              .addImm(0);
+      }
+      return;
+    }
+  }
+
   // Handle copy from csr
   if (RISCV::VCSRRegClass.contains(SrcReg) &&
       RISCV::GPRRegClass.contains(DstReg)) {
