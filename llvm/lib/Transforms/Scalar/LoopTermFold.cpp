@@ -18,6 +18,7 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/UniformityAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/BasicBlock.h"
@@ -50,9 +51,19 @@ STATISTIC(NumTermFold,
 
 static std::optional<std::tuple<PHINode *, PHINode *, const SCEV *, bool>>
 canFoldTermCondOfLoop(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
-                      const LoopInfo &LI, const TargetTransformInfo &TTI) {
+                      const LoopInfo &LI, const TargetTransformInfo &TTI,
+                      const UniformityInfo *UI) {
   if (!L->isInnermost()) {
     LLVM_DEBUG(dbgs() << "Cannot fold on non-innermost loop\n");
+    return std::nullopt;
+  }
+  // On a target with branch divergence, moving the exit test onto another IV
+  // can turn a uniform loop branch into a divergent one (a uniform trip counter
+  // replaced by a per-thread pointer); that takes uniformity information.
+  const bool CheckUniformity =
+      TTI.hasBranchDivergence(L->getHeader()->getParent());
+  if (CheckUniformity && !UI) {
+    LLVM_DEBUG(dbgs() << "Cannot fold without uniformity information\n");
     return std::nullopt;
   }
   // Only inspect on simple loop structure
@@ -76,6 +87,7 @@ canFoldTermCondOfLoop(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
         dbgs() << "Cannot fold on branching condition that is not an ICmpInst");
     return std::nullopt;
   }
+  const bool UniformExit = CheckUniformity && !UI->isDivergent(TermCond);
   if (!TermCond->hasOneUse()) {
     LLVM_DEBUG(
         dbgs()
@@ -128,6 +140,12 @@ canFoldTermCondOfLoop(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
   for (PHINode &PN : L->getHeader()->phis()) {
     if (ToFold == &PN)
       continue;
+
+    if (UniformExit && UI->isDivergent(&PN)) {
+      LLVM_DEBUG(dbgs() << "Phi '" << PN
+                        << "' is divergent; the exit test is uniform\n");
+      continue;
+    }
 
     if (!SE.isSCEVable(PN.getType())) {
       LLVM_DEBUG(dbgs() << "IV of phi '" << PN
@@ -229,12 +247,13 @@ canFoldTermCondOfLoop(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
 
 static bool RunTermFold(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
                         LoopInfo &LI, const TargetTransformInfo &TTI,
+                        const UniformityInfo *UI,
                         TargetLibraryInfo &TLI, MemorySSA *MSSA) {
   std::unique_ptr<MemorySSAUpdater> MSSAU;
   if (MSSA)
     MSSAU = std::make_unique<MemorySSAUpdater>(MSSA);
 
-  auto Opt = canFoldTermCondOfLoop(L, SE, DT, LI, TTI);
+  auto Opt = canFoldTermCondOfLoop(L, SE, DT, LI, TTI, UI);
   if (!Opt)
     return false;
 
@@ -329,6 +348,7 @@ void LoopTermFold::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addPreserved<ScalarEvolutionWrapperPass>();
   AU.addRequired<TargetLibraryInfoWrapperPass>();
   AU.addRequired<TargetTransformInfoWrapperPass>();
+  AU.addRequired<UniformityInfoWrapperPass>();
   AU.addPreserved<MemorySSAWrapperPass>();
 }
 
@@ -347,13 +367,18 @@ bool LoopTermFold::runOnLoop(Loop *L, LPPassManager & /*LPM*/) {
   MemorySSA *MSSA = nullptr;
   if (MSSAAnalysis)
     MSSA = &MSSAAnalysis->getMSSA();
-  return RunTermFold(L, SE, DT, LI, TTI, TLI, MSSA);
+  const UniformityInfo *UI =
+      TTI.hasBranchDivergence(L->getHeader()->getParent())
+          ? &getAnalysis<UniformityInfoWrapperPass>().getUniformityInfo()
+          : nullptr;
+  return RunTermFold(L, SE, DT, LI, TTI, UI, TLI, MSSA);
 }
 
 PreservedAnalyses LoopTermFoldPass::run(Loop &L, LoopAnalysisManager &AM,
                                         LoopStandardAnalysisResults &AR,
                                         LPMUpdater &) {
-  if (!RunTermFold(&L, AR.SE, AR.DT, AR.LI, AR.TTI, AR.TLI, AR.MSSA))
+  if (!RunTermFold(&L, AR.SE, AR.DT, AR.LI, AR.TTI, /*UI=*/nullptr, AR.TLI,
+                   AR.MSSA))
     return PreservedAnalyses::all();
 
   auto PA = getLoopPassPreservedAnalyses();
@@ -371,6 +396,7 @@ INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
+INITIALIZE_PASS_DEPENDENCY(UniformityInfoWrapperPass)
 INITIALIZE_PASS_END(LoopTermFold, "loop-term-fold", "Loop Terminator Folding",
                     false, false)
 
