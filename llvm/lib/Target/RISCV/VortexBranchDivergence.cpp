@@ -123,6 +123,17 @@ static bool skipDivergenceForSize(const Function &F) {
          !moduleHasSIMTKernels(*F.getParent());
 }
 
+// The size verdict, made once by VortexBranchDivergence0 and recorded on the
+// function; measured here only before that pass has run. Structurization grows
+// the CFG, so measuring again afterwards could disagree with the lowering.
+static bool isDivergenceSkipped(const Function &F) {
+  if (F.hasFnAttribute("vortex-divergence-skipped"))
+    return true;
+  if (F.hasFnAttribute("vortex-divergence-lowered"))
+    return false;
+  return skipDivergenceForSize(F);
+}
+
 namespace vortex {
 
 class NamePrinter {
@@ -628,6 +639,11 @@ INITIALIZE_PASS(VortexBranchDivergence2, "VortexBranchDivergence-2",
 
 namespace vortex {
 
+static bool recordCallSiteArgs(Function &F, const dv_info_t *dv_info,
+                               const UniformityInfo *UA);
+static void markAddressTakenArgs(Function &F);
+static bool storesPrivateAddress(Function &F, const dv_info_t *dv_info);
+
 char VortexDivergenceAnalysis0::ID = 0;
 
 StringRef VortexDivergenceAnalysis0::getPassName() const {
@@ -692,16 +708,27 @@ bool VortexDivergenceAnalysis0::runOnModule(Module &M) {
   // exponential anyway and downstream VortexBranchDivergence0/1 will also bail
   // (via the same VortexMaxDivergenceBBs guard). Also cap the fixed-point
   // iteration count to avoid pathological convergence on large modules.
+  for (auto F : funcs) {
+    markAddressTakenArgs(*F);
+  }
+
   bool changed;
   unsigned iter = 0;
   static constexpr unsigned kMaxFixedPointIterations = 16;
   do {
     changed = false;
+    DivergenceInfo::beginIteration(&M);
     for (auto it = funcs.rbegin(), ie = funcs.rend(); it != ie; ++it) {
-      if (skipDivergenceForSize(**it)) {
+      if (isDivergenceSkipped(**it)) {
         LLVM_DEBUG(dbgs() << "*** VX: skip large function in analysis: "
                           << (*it)->getName() << " (" << (*it)->size()
                           << " BBs)\n");
+        // Its call sites still count: as divergent, and for what they pass.
+        auto dv = DivergenceInfo::get(*it);
+        changed |= recordCallSiteArgs(**it, dv, nullptr);
+        if (storesPrivateAddress(**it, dv)) {
+          changed |= DivergenceInfo::setPrivateEscaped(&M);
+        }
         continue;
       }
       changed |= FPM.run(**it);
@@ -709,6 +736,10 @@ bool VortexDivergenceAnalysis0::runOnModule(Module &M) {
     if (++iter >= kMaxFixedPointIterations) {
       LLVM_DEBUG(dbgs() << "*** VX: hit fixed-point iteration cap ("
                         << kMaxFixedPointIterations << ")\n");
+      if (changed) {
+        // Unsettled: no argument verdict can be trusted, so none is uniform.
+        DivergenceInfo::clearUniformInArgs(&M);
+      }
       break;
     }
   } while (changed);
@@ -743,6 +774,145 @@ bool VortexDivergenceAnalysis1::runOnModule(Module &M) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+// Whether V, a pointer or an integer address, may point into a thread's stack.
+// Every thread has its own stack at the same addresses, so the address can be
+// uniform while the data behind it differs per thread. Follows address
+// arithmetic back to its base: an alloca, a byval copy, or an argument a caller
+// passed a private address in (dv_info_t::isPrivateArg). A call's result may
+// be derived from any of its arguments. An address loaded from memory is
+// private only once the module has stored a private address somewhere that is
+// not itself private (DivergenceInfo::isPrivateEscaped); a private address
+// handed to an external function is assumed not to come back that way.
+static bool mayPointToPrivate(const Value *V, const dv_info_t *dv_info,
+                              SmallPtrSetImpl<const Value *> &Visited,
+                              unsigned Depth = 0) {
+  static constexpr unsigned kMaxDepth = 32;
+  if (Depth > kMaxDepth)
+    return true; // conservative
+  if (!Visited.insert(V).second)
+    return false;
+  if (isa<AllocaInst>(V))
+    return true;
+  if (auto Arg = dyn_cast<Argument>(V))
+    return Arg->hasByValAttr() || (dv_info && dv_info->isPrivateArg(Arg));
+  if (isa<Constant>(V))
+    return false;
+  if (auto LI = dyn_cast<LoadInst>(V))
+    return DivergenceInfo::isPrivateEscaped(LI->getModule());
+  auto rec = [&](const Value *Op) {
+    return mayPointToPrivate(Op, dv_info, Visited, Depth + 1);
+  };
+  if (auto GEP = dyn_cast<GEPOperator>(V))
+    return rec(GEP->getPointerOperand());
+  if (auto PN = dyn_cast<PHINode>(V)) {
+    for (auto &In : PN->incoming_values()) {
+      if (rec(In))
+        return true;
+    }
+    return false;
+  }
+  if (auto SI = dyn_cast<SelectInst>(V))
+    return rec(SI->getTrueValue()) || rec(SI->getFalseValue());
+  if (auto Op = dyn_cast<Operator>(V)) {
+    switch (Op->getOpcode()) {
+    case Instruction::BitCast:
+    case Instruction::AddrSpaceCast:
+    case Instruction::IntToPtr:
+    case Instruction::PtrToInt:
+    case Instruction::ZExt:
+    case Instruction::SExt:
+    case Instruction::Trunc:
+    case Instruction::Freeze:
+      return rec(Op->getOperand(0));
+    case Instruction::ExtractValue:
+    case Instruction::ExtractElement:
+      return rec(Op->getOperand(0));
+    case Instruction::Add:
+    case Instruction::Sub:
+    case Instruction::Or:
+    case Instruction::Xor:
+    case Instruction::And:
+    case Instruction::InsertValue:
+    case Instruction::InsertElement:
+    case Instruction::ShuffleVector:
+      // either operand may carry the base address
+      return rec(Op->getOperand(0)) || rec(Op->getOperand(1));
+    default:
+      break;
+    }
+  }
+  if (auto CB = dyn_cast<CallBase>(V)) {
+    for (auto &A : CB->args()) {
+      Type *T = A->getType();
+      if ((T->isPointerTy() || T->isIntegerTy() || T->isAggregateType() ||
+           T->isVectorTy()) && rec(A))
+        return true;
+    }
+  }
+  return false;
+}
+
+// Records what F's call sites pass to local functions: whether each argument
+// is uniform (without UA, as for a function the analysis skips, every value is
+// taken as divergent) and whether it may point into the stack. A function whose
+// address is taken has callers no one sees; its arguments stay divergent and
+// private (markAddressTakenArgs).
+static bool recordCallSiteArgs(Function &F, const dv_info_t *dv_info,
+                               const UniformityInfo *UA) {
+  bool changed = false;
+  for (auto &I : instructions(F)) {
+    auto CB = dyn_cast<CallBase>(&I);
+    if (!CB)
+      continue;
+    auto Callee = CB->getCalledFunction();
+    if (!Callee || !Callee->hasLocalLinkage() || Callee->hasAddressTaken())
+      continue;
+    const unsigned an = std::min<unsigned>(CB->arg_size(), Callee->arg_size());
+    for (unsigned ai = 0; ai < an; ++ai) {
+      auto value = CB->getArgOperand(ai);
+      auto arg = Callee->getArg(ai);
+      bool isDivergent = !UA || UA->isDivergent(value);
+      LLVM_DEBUG(dbgs() << "*** VX: " << (isDivergent ? "divergent" : "uniform") << " function call argument" << ai << "' in '" << F.getName() << "': " << I << "\n");
+      changed |= DivergenceInfo::setUniformInArg(Callee, arg, !isDivergent);
+      SmallPtrSet<const Value *, 16> Visited;
+      if (mayPointToPrivate(value, dv_info, Visited)) {
+        LLVM_DEBUG(dbgs() << "*** VX: private function call argument" << ai << " in '" << F.getName() << "': " << I << "\n");
+        changed |= DivergenceInfo::setPrivateArg(Callee, arg);
+      }
+    }
+  }
+  return changed;
+}
+
+static void markAddressTakenArgs(Function &F) {
+  if (!F.hasLocalLinkage() || !F.hasAddressTaken())
+    return;
+  for (auto &Arg : F.args())
+    DivergenceInfo::setPrivateArg(&F, &Arg);
+}
+
+// Whether F stores a private address where a load that is not private can read
+// it back: into non-private memory, or through an atomic.
+static bool storesPrivateAddress(Function &F, const dv_info_t *dv_info) {
+  auto priv = [&](const Value *V) {
+    SmallPtrSet<const Value *, 16> Visited;
+    return mayPointToPrivate(V, dv_info, Visited);
+  };
+  for (auto &I : instructions(F)) {
+    if (auto SI = dyn_cast<StoreInst>(&I)) {
+      if (priv(SI->getValueOperand()) && !priv(SI->getPointerOperand()))
+        return true;
+    } else if (auto RMW = dyn_cast<AtomicRMWInst>(&I)) {
+      if (priv(RMW->getValOperand()))
+        return true;
+    } else if (auto CX = dyn_cast<AtomicCmpXchgInst>(&I)) {
+      if (priv(CX->getNewValOperand()))
+        return true;
+    }
+  }
+  return false;
+}
+
 char VortexDivergenceArguments::ID = 0;
 
 StringRef VortexDivergenceArguments::getPassName() const {
@@ -773,9 +943,13 @@ bool VortexDivergenceArguments::runOnFunction(Function &F) {
   auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   auto &TLI = getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
 
-  bool changed = false;
+  bool changed = recordCallSiteArgs(F, dv_info, &UA);
 
-  // analyze uniformity of function call arguments
+  if (storesPrivateAddress(F, dv_info)) {
+    changed |= DivergenceInfo::setPrivateEscaped(F.getParent());
+  }
+
+  // analyze pointers that function calls may write divergently
   for (auto &BB : F) {
     for (auto &I : BB) {
       if (auto CB = dyn_cast<CallBase>(&I)) {
@@ -791,11 +965,8 @@ bool VortexDivergenceArguments::runOnFunction(Function &F) {
             }
           }
           if (auto Callee = CB->getCalledFunction()) {
-            if (Callee->hasLocalLinkage()) {
-              auto arg = std::next(Callee->arg_begin(), ai);
-              bool isDivergent = UA.isDivergent(value);
-              LLVM_DEBUG(dbgs() << "*** VX: " << (isDivergent ? "divergent" : "uniform") << " function call argument" << ai << "' in '" << F.getName() << "': " << I << "\n");
-              changed |= DivergenceInfo::setUniformInArg(Callee, arg, !isDivergent);
+            if (Callee->hasLocalLinkage() && ai < Callee->arg_size()) {
+              auto arg = Callee->getArg(ai);
               if (isPtrArgDivergent) {
                 // check if prioor analysis has already evaluated this pointer
                 isPtrArgDivergent = !DivergenceInfo::isUniformOutArg(Callee, arg);
@@ -1003,6 +1174,9 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
   // so re-measuring the size there diverges from this verdict — processed
   // here + skipped there emits no split/join at all and silently drops
   // lanes on every divergent branch).
+  if (F.hasFnAttribute("vortex-divergence-skipped")) {
+    return false;
+  }
   if (skipDivergenceForSize(F)) {
     F.addFnAttr("vortex-divergence-skipped");
     llvm::errs() << "warning: Vortex divergence pipeline skipped for large "
@@ -1011,6 +1185,9 @@ bool VortexBranchDivergence0::runOnFunction(Function &F) {
                  << "); divergent control flow in it will misexecute\n";
     return false;
   }
+  // Lets the argument analysis that runs after structurization keep this
+  // verdict instead of measuring the grown CFG (isDivergenceSkipped).
+  F.addFnAttr("vortex-divergence-lowered");
 
   auto &Context = F.getContext();
   auto &TPC = getAnalysis<TargetPassConfig>();
@@ -1762,6 +1939,7 @@ PreservedAnalyses UniformAnnotationPass::run(Function &F, FunctionAnalysisManage
 
 llvm::DenseMap<const llvm::Function*, std::unique_ptr<dv_info_t>>
     DivergenceInfo::dv_infos_;
+llvm::DenseSet<const llvm::Module*> DivergenceInfo::private_escaped_;
 llvm::sys::Mutex DivergenceInfo::mutex_;
 
 /* dv_info_t entries are heap-allocated: get() hands out raw pointers that
@@ -1787,6 +1965,41 @@ bool DivergenceInfo::setUniformInArg(const llvm::Function* F, const llvm::Argume
   return dv_info_slot(dv_infos_, F).setUniformInArg(Arg, is_uniform);
 }
 
+bool DivergenceInfo::setPrivateArg(const llvm::Function* F, const llvm::Argument* Arg) {
+  llvm::sys::ScopedLock lock(mutex_);
+  return dv_info_slot(dv_infos_, F).setPrivateArg(Arg);
+}
+
+bool DivergenceInfo::setPrivateEscaped(const llvm::Module* M) {
+  llvm::sys::ScopedLock lock(mutex_);
+  return private_escaped_.insert(M).second;
+}
+
+bool DivergenceInfo::isPrivateEscaped(const llvm::Module* M) {
+  llvm::sys::ScopedLock lock(mutex_);
+  return private_escaped_.count(M) != 0;
+}
+
+// Walks the module's functions rather than the map's keys: a key may name a
+// function of a module already destroyed.
+void DivergenceInfo::beginIteration(const llvm::Module* M) {
+  llvm::sys::ScopedLock lock(mutex_);
+  for (auto &F : *M) {
+    auto it = dv_infos_.find(&F);
+    if (it != dv_infos_.end())
+      it->second->beginIteration();
+  }
+}
+
+void DivergenceInfo::clearUniformInArgs(const llvm::Module* M) {
+  llvm::sys::ScopedLock lock(mutex_);
+  for (auto &F : *M) {
+    auto it = dv_infos_.find(&F);
+    if (it != dv_infos_.end())
+      it->second->clearUniformInArgs();
+  }
+}
+
 bool DivergenceInfo::isUniformRet(const llvm::Function* F) {
   llvm::sys::ScopedLock lock(mutex_);
   auto it = dv_infos_.find(F);
@@ -1807,12 +2020,9 @@ bool DivergenceInfo::isUniformOutArg(const llvm::Function* F, const llvm::Argume
 
 void DivergenceInfo::clear(const llvm::Module* M) {
   llvm::sys::ScopedLock lock(mutex_);
-  // Clear all divergence info for the module
-  for (auto it = dv_infos_.begin(); it != dv_infos_.end();) {
-    auto itc = it++;
-    if (itc->first->getParent() == M) {
-      dv_infos_.erase(itc);
-    }
+  private_escaped_.erase(M);
+  for (auto &F : *M) {
+    dv_infos_.erase(&F);
   }
 }
 
@@ -1861,6 +2071,21 @@ bool DivergenceTracker::isSourceOfDivergence(const Value *V) {
    || isa<AtomicCmpXchgInst>(V)) {
     LLVM_DEBUG(dbgs() << "*** VX: divergent=true for atomic variable: " << *V << "\n");
     return true;
+  }
+
+  // A load from a thread's stack reads a different value in every thread,
+  // even at a uniform address.
+  if (auto LI = dyn_cast<LoadInst>(V)) {
+    const Value *Ptr = LI->getPointerOperand();
+    auto It = private_ptr_cache_.find(Ptr);
+    if (It == private_ptr_cache_.end()) {
+      SmallPtrSet<const Value *, 16> Visited;
+      It = private_ptr_cache_.try_emplace(Ptr, mayPointToPrivate(Ptr, dv_info_, Visited)).first;
+    }
+    if (It->second) {
+      LLVM_DEBUG(dbgs() << "*** VX: divergent=true for private load: " << *V << "\n");
+      return true;
+    }
   }
 
   // We conservatively assume function return values are divergent
