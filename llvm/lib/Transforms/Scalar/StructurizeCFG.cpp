@@ -71,18 +71,6 @@ static cl::opt<bool>
                           cl::desc("Allow relaxed uniform region checks"),
                           cl::init(true));
 
-// Complexity guard. This pass has worst-case exponential behavior on large
-// CFGs. On musl printf/iconv-family functions (hundreds of BBs in one region)
-// it hangs the compiler for minutes-to-hours. Cap region size at a
-// conservative threshold — the critical SIMT kernels and math functions
-// (sinf etc., typically <50 BBs) are well under it. Such large regions are
-// usually in I/O / parsing / crypto code that isn't called from SIMT.
-static cl::opt<unsigned> MaxStructurizeBBs(
-    "structurizecfg-max-bbs",
-    cl::desc("Skip StructurizeCFG on regions with more BBs than this "
-             "(worst-case exponential complexity)"),
-    cl::init(100));
-
 // Definition of the complex types used in this pass.
 
 using BBValuePair = std::pair<BasicBlock *, Value *>;
@@ -397,6 +385,10 @@ public:
   }
 
   bool runOnRegion(Region *R, RGPassManager &RGM) override {
+    // Before the uniform-region checks, which would otherwise annotate the
+    // branches of a function that run() then leaves alone.
+    if (R->getEntry()->getParent()->hasFnAttribute("vortex-divergence-skipped"))
+      return false;
     StructurizeCFG SCFG;
     SCFG.init(R);
     if (SkipUniformRegions) {
@@ -1357,19 +1349,17 @@ bool StructurizeCFG::run(Region *R, DominatorTree *DT) {
   Func = R->getEntry()->getParent();
   assert(hasOnlySimpleTerminator(*Func) && "Unsupported block terminator.");
 
-  // Complexity guard — see MaxStructurizeBBs at top of file. Real perf fix
-  // (NOT cosmetic): this pass has worst-case exponential behavior on large
-  // regions; without this guard, musl printf/iconv-family functions hang the
-  // compiler indefinitely. Kept independent of assertion mode.
-  unsigned BBCount = 0;
-  for (BasicBlock *BB : R->blocks()) {
-    (void)BB;
-    if (++BBCount > MaxStructurizeBBs) {
-      LLVM_DEBUG(dbgs() << "*** structurize: skip large region in "
-                        << Func->getName() << " (> " << MaxStructurizeBBs
-                        << " BBs)\n");
-      return false;
-    }
+  // This pass is worst-case exponential, so the Vortex divergence pipeline
+  // leaves functions too large to structurize alone (musl printf/iconv-class
+  // CFGs would hang the compiler). That verdict is made once, before this pass
+  // runs, and recorded on the function; following it rather than measuring each
+  // region keeps structurization and split/join lowering in agreement. A region
+  // skipped here while its divergent branches are still lowered leaves a split
+  // that does not dominate its join.
+  if (Func->hasFnAttribute("vortex-divergence-skipped")) {
+    LLVM_DEBUG(dbgs() << "*** structurize: skip " << Func->getName()
+                      << " (vortex-divergence-skipped)\n");
+    return false;
   }
 
   ParentRegion = R;
