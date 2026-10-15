@@ -14906,10 +14906,14 @@ static SDValue expandMul(SDNode *N, SelectionDAG &DAG,
     // 2^N - 3/5/9 --> (sub (shl X, C1), (shXadd X, x))
     for (uint64_t Offset : {3, 5, 9}) {
       if (isPowerOf2_64(MulAmt + Offset)) {
+        // MulAmt is zero-extended, so on RV32 a constant of -Offset gives
+        // MulAmt + Offset == 2^32: an out-of-range i32 shift.
+        unsigned ShAmt = Log2_64(MulAmt + Offset);
+        if (ShAmt >= VT.getSizeInBits())
+          continue;
         SDLoc DL(N);
         SDValue Shift1 =
-            DAG.getNode(ISD::SHL, DL, VT, X,
-                        DAG.getConstant(Log2_64(MulAmt + Offset), DL, VT));
+            DAG.getNode(ISD::SHL, DL, VT, X, DAG.getConstant(ShAmt, DL, VT));
         SDValue Mul359 =
             DAG.getNode(RISCVISD::SHL_ADD, DL, VT, X,
                         DAG.getConstant(Log2_64(Offset - 1), DL, VT), X);
@@ -14919,8 +14923,12 @@ static SDValue expandMul(SDNode *N, SelectionDAG &DAG,
   }
 
   // 2^N - 2^M -> (sub (shl X, C1), (shl X, C2))
+  // MulAmt is zero-extended, so on RV32 a constant of -2^M (or 2^31) gives
+  // MulAmt + MulAmtLowBit == 2^32: an out-of-range i32 shift. Such constants
+  // only reach here as opaque (hoisted) constants; leave the MUL alone.
   uint64_t MulAmtLowBit = MulAmt & (-MulAmt);
-  if (isPowerOf2_64(MulAmt + MulAmtLowBit)) {
+  if (isPowerOf2_64(MulAmt + MulAmtLowBit) &&
+      Log2_64(MulAmt + MulAmtLowBit) < VT.getSizeInBits()) {
     uint64_t ShiftAmt1 = MulAmt + MulAmtLowBit;
     SDLoc DL(N);
     SDValue Shift1 = DAG.getNode(ISD::SHL, DL, VT, N->getOperand(0),
