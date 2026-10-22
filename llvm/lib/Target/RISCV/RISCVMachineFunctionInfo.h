@@ -81,6 +81,10 @@ private:
   /// Does it probe the stack for a dynamic allocation?
   bool HasDynamicAllocation = false;
 
+  /// XVortex warp-gather destinations a gather can write while lanes of this
+  /// function are parked (see RISCVTargetLowering::finalizeLowering).
+  SmallVector<MCPhysReg, 2> WarpGatherRegs;
+
 public:
   RISCVMachineFunctionInfo(const Function &F, const RISCVSubtarget *STI);
 
@@ -165,6 +169,8 @@ public:
 
   bool hasDynamicAllocation() const { return HasDynamicAllocation; }
   void setDynamicAllocation() { HasDynamicAllocation = true; }
+
+  ArrayRef<MCPhysReg> getWarpGatherRegs() const { return WarpGatherRegs; }
 };
 
 } // end namespace llvm

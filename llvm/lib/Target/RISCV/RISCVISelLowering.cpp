@@ -20994,6 +20994,22 @@ SDValue RISCVTargetLowering::LowerCall(CallLoweringInfo &CLI,
   // reserved, if so report an error. Do the same for the return address if this
   // is not a tailcall.
   validateCCReservedRegs(RegsToPass, MF);
+
+  // fastcc passes its arguments around the registers each side reserves
+  // (CC_RISCV_FastCC), so both must reserve the same ones.
+  if (CallConv == CallingConv::Fast && CLI.CB)
+    if (const Function *CF = CLI.CB->getCalledFunction()) {
+      const auto &CalleeST =
+          getTargetMachine().getSubtarget<RISCVSubtarget>(*CF);
+      for (MCPhysReg Reg = RISCV::X1; Reg <= RISCV::X31; ++Reg)
+        if (Subtarget.isRegisterReservedByUser(Reg) !=
+            CalleeST.isRegisterReservedByUser(Reg)) {
+          MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
+              MF.getFunction(),
+              "fastcc callee reserves different registers than its caller."});
+          break;
+        }
+    }
   if (!IsTailCall && MF.getSubtarget().isRegisterReservedByUser(RISCV::X1))
     MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
         MF.getFunction(),
@@ -23128,6 +23144,53 @@ bool RISCVTargetLowering::isCtpopFast(EVT VT) const {
 unsigned RISCVTargetLowering::getCustomCtpopCost(EVT VT,
                                                  ISD::CondCode Cond) const {
   return isCtpopFast(VT) ? 0 : 1;
+}
+
+// Where divergence can park lanes of the warp: the compiler's split, join,
+// predicate and thread-mask instructions, and any inline asm statement (the
+// intrinsics' own divergence, and the ray-tracing wait, which can trap to a
+// callback on a subset of the lanes).
+static bool isWarpParkingPoint(const MachineInstr &MI) {
+  switch (MI.getOpcode()) {
+  case RISCV::VX_SPLIT:
+  case RISCV::VX_SPLIT_N:
+  case RISCV::VX_JOIN:
+  case RISCV::VX_PRED:
+  case RISCV::VX_PRED_N:
+  case RISCV::VX_TMC:
+    return true;
+  default:
+    return MI.isInlineAsm();
+  }
+}
+
+// XVortex WGATHER writes its destination on every lane of the warp, active or
+// not, so a lane parked by divergence must not hold a value in that register
+// while a gather runs: each parking point clobbers it, which keeps it free for
+// the values live there and leaves it allocatable everywhere else. A statement
+// naming the register itself (a gather, a consumer of the packed lanes) keeps
+// its own operands.
+void RISCVTargetLowering::finalizeLowering(MachineFunction &MF) const {
+  ArrayRef<MCPhysReg> GatherRegs =
+      MF.getInfo<RISCVMachineFunctionInfo>()->getWarpGatherRegs();
+  const TargetRegisterInfo &TRI = *Subtarget.getRegisterInfo();
+  for (MachineBasicBlock &MBB : MF) {
+    for (MachineInstr &MI : MBB) {
+      if (GatherRegs.empty() || !isWarpParkingPoint(MI))
+        continue;
+      for (MCPhysReg R : GatherRegs) {
+        bool Named = any_of(MI.operands(), [&](const MachineOperand &MO) {
+          return MO.isReg() && MO.getReg().isPhysical() &&
+                 TRI.regsOverlap(MO.getReg(), R);
+        });
+        if (!Named)
+          MI.addOperand(
+              MF, MachineOperand::CreateReg(R, /*isDef=*/true, /*isImp=*/true,
+                                            /*isKill=*/false, /*isDead=*/true));
+      }
+    }
+  }
+  TargetLoweringBase::finalizeLowering(MF);
 }
 
 bool RISCVTargetLowering::shouldInsertFencesForAtomic(

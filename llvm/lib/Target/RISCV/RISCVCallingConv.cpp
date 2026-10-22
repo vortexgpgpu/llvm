@@ -601,6 +601,27 @@ bool llvm::CC_RISCV(unsigned ValNo, MVT ValVT, MVT LocVT,
   return false;
 }
 
+// Allocate the first free fastcc GPR, of the width Regs names, skipping those
+// reserved by the user (-ffixed-xN): fastcc is a private convention, so it
+// passes around them instead of rejecting the call. Regs parallels
+// getFastCCArgGPRs.
+static MCRegister allocateFastCCGPR(CCState &State, ArrayRef<MCPhysReg> Regs,
+                                    const RISCVSubtarget &Subtarget) {
+  ArrayRef<MCPhysReg> GPRs = getFastCCArgGPRs(Subtarget.getTargetABI());
+  assert(Regs.size() == GPRs.size() && "fastcc register lists differ");
+  for (auto [Reg, GPR] : zip_equal(Regs, GPRs))
+    if (!Subtarget.isRegisterReservedByUser(GPR) && !State.isAllocated(Reg))
+      return State.AllocateReg(Reg);
+  return MCRegister();
+}
+
+static bool hasFreeFastCCGPR(const CCState &State,
+                             const RISCVSubtarget &Subtarget) {
+  return any_of(getFastCCArgGPRs(Subtarget.getTargetABI()), [&](MCPhysReg R) {
+    return !Subtarget.isRegisterReservedByUser(R) && !State.isAllocated(R);
+  });
+}
+
 // FastCC has less than 1% performance improvement for some particular
 // benchmark. But theoretically, it may have benefit for some cases.
 bool llvm::CC_RISCV_FastCC(unsigned ValNo, MVT ValVT, MVT LocVT,
@@ -653,7 +674,8 @@ bool llvm::CC_RISCV_FastCC(unsigned ValNo, MVT ValVT, MVT LocVT,
 
   // Check if there is an available GPRF16 before hitting the stack.
   if ((LocVT == MVT::f16 && Subtarget.hasStdExtZhinxmin())) {
-    if (MCRegister Reg = State.AllocateReg(getFastCCArgGPRF16s(ABI))) {
+    if (MCRegister Reg =
+            allocateFastCCGPR(State, getFastCCArgGPRF16s(ABI), Subtarget)) {
       State.addLoc(CCValAssign::getReg(ValNo, ValVT, Reg, LocVT, LocInfo));
       return false;
     }
@@ -661,7 +683,8 @@ bool llvm::CC_RISCV_FastCC(unsigned ValNo, MVT ValVT, MVT LocVT,
 
   // Check if there is an available GPRF32 before hitting the stack.
   if (LocVT == MVT::f32 && Subtarget.hasStdExtZfinx()) {
-    if (MCRegister Reg = State.AllocateReg(getFastCCArgGPRF32s(ABI))) {
+    if (MCRegister Reg =
+            allocateFastCCGPR(State, getFastCCArgGPRF32s(ABI), Subtarget)) {
       State.addLoc(CCValAssign::getReg(ValNo, ValVT, Reg, LocVT, LocInfo));
       return false;
     }
@@ -669,7 +692,8 @@ bool llvm::CC_RISCV_FastCC(unsigned ValNo, MVT ValVT, MVT LocVT,
 
   // Check if there is an available GPR before hitting the stack.
   if (LocVT == MVT::f64 && Subtarget.is64Bit() && Subtarget.hasStdExtZdinx()) {
-    if (MCRegister Reg = State.AllocateReg(getFastCCArgGPRs(ABI))) {
+    if (MCRegister Reg =
+            allocateFastCCGPR(State, getFastCCArgGPRs(ABI), Subtarget)) {
       if (LocVT.getSizeInBits() != Subtarget.getXLen()) {
         LocVT = XLenVT;
         State.addLoc(
@@ -680,8 +704,6 @@ bool llvm::CC_RISCV_FastCC(unsigned ValNo, MVT ValVT, MVT LocVT,
       return false;
     }
   }
-
-  ArrayRef<MCPhysReg> ArgGPRs = getFastCCArgGPRs(ABI);
 
   if (LocVT.isVector()) {
     if (MCRegister Reg = allocateRVVReg(ValVT, ValNo, State, TLI)) {
@@ -699,15 +721,15 @@ bool llvm::CC_RISCV_FastCC(unsigned ValNo, MVT ValVT, MVT LocVT,
 
     // Pass scalable vectors indirectly. Pass fixed vectors indirectly if we
     // have a free GPR.
-    if (LocVT.isScalableVector() ||
-        State.getFirstUnallocated(ArgGPRs) != ArgGPRs.size()) {
+    if (LocVT.isScalableVector() || hasFreeFastCCGPR(State, Subtarget)) {
       LocInfo = CCValAssign::Indirect;
       LocVT = XLenVT;
     }
   }
 
   if (LocVT == XLenVT) {
-    if (MCRegister Reg = State.AllocateReg(getFastCCArgGPRs(ABI))) {
+    if (MCRegister Reg =
+            allocateFastCCGPR(State, getFastCCArgGPRs(ABI), Subtarget)) {
       State.addLoc(CCValAssign::getReg(ValNo, ValVT, Reg, LocVT, LocInfo));
       return false;
     }
