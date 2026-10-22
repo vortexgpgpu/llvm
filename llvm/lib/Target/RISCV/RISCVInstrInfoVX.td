@@ -111,3 +111,51 @@ def : Pat<(int_riscv_vx_mov_i64 GPR:$src), (VX_MOV GPR:$src)>;
 
 def : Pat<(int_riscv_vx_bar_i32 GPR:$rs1, GPR:$rs2), (VX_BAR GPR:$rs1, GPR:$rs2)>;
 def : Pat<(int_riscv_vx_bar_i64 GPR:$rs1, GPR:$rs2), (VX_BAR GPR:$rs1, GPR:$rs2)>;
+
+//===----------------------------------------------------------------------===//
+// XVortexAMOD: 64-bit atomics on RV32
+//===----------------------------------------------------------------------===//
+
+// The RV64 .D encodings, naming even-aligned register pairs for the operand and
+// the old value, as Zacas's AMOCAS_D_RV32 does. Selected from i64 atomics by
+// RISCVTargetLowering (replaceAMO64Results).
+// The pair parser declines without the extension, so a plain RV32 assembler
+// still reports the .D atomics as RV64-only.
+def GPRPairXVortexAMODOperand : AsmOperandClass {
+  let Name = "GPRPairXVortexAMOD";
+  let ParserMethod = "parseGPRPairXVortexAMOD";
+  let PredicateMethod = "isGPRPair";
+  let RenderMethod = "addRegOperands";
+}
+
+def GPRPairXVortexAMOD : RegisterOperand<GPRPair> {
+  let ParserMatchClass = GPRPairXVortexAMODOperand;
+}
+
+let hasSideEffects = 0, mayLoad = 1, mayStore = 1 in
+class VXAMO64_rr<bits<5> funct5, bit aq, bit rl, string opcodestr>
+    : RVInstRAtomic<funct5, aq, rl, 0b011, OPC_AMO,
+                    (outs GPRPairXVortexAMOD:$rd),
+                    (ins GPRMemZeroOffset:$rs1, GPRPairXVortexAMOD:$rs2),
+                    opcodestr, "$rd, $rs2, $rs1">,
+      Sched<[WriteAtomicD, ReadAtomicDA, ReadAtomicDD]>;
+
+multiclass VXAMO64_rr_aq_rl<bits<5> funct5, string opcodestr> {
+  def ""     : VXAMO64_rr<funct5, 0, 0, opcodestr>;
+  def _AQ    : VXAMO64_rr<funct5, 1, 0, opcodestr # ".aq">;
+  def _RL    : VXAMO64_rr<funct5, 0, 1, opcodestr # ".rl">;
+  def _AQ_RL : VXAMO64_rr<funct5, 1, 1, opcodestr # ".aqrl">;
+}
+
+let Predicates = [HasVendorXVortexAMOD, IsRV32],
+    DecoderNamespace = "RV32XVortexAMOD" in {
+defm AMOSWAP_D_RV32 : VXAMO64_rr_aq_rl<0b00001, "amoswap.d">;
+defm AMOADD_D_RV32  : VXAMO64_rr_aq_rl<0b00000, "amoadd.d">;
+defm AMOXOR_D_RV32  : VXAMO64_rr_aq_rl<0b00100, "amoxor.d">;
+defm AMOAND_D_RV32  : VXAMO64_rr_aq_rl<0b01100, "amoand.d">;
+defm AMOOR_D_RV32   : VXAMO64_rr_aq_rl<0b01000, "amoor.d">;
+defm AMOMIN_D_RV32  : VXAMO64_rr_aq_rl<0b10000, "amomin.d">;
+defm AMOMAX_D_RV32  : VXAMO64_rr_aq_rl<0b10100, "amomax.d">;
+defm AMOMINU_D_RV32 : VXAMO64_rr_aq_rl<0b11000, "amominu.d">;
+defm AMOMAXU_D_RV32 : VXAMO64_rr_aq_rl<0b11100, "amomaxu.d">;
+} // Predicates = [HasVendorXVortexAMOD, IsRV32]

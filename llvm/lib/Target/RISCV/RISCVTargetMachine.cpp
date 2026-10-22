@@ -247,11 +247,11 @@ RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
   setMachineOutliner(true);
   setSupportsDefaultOutlining(true);
 
-  if (FS.contains("+xvortex")
-   && VortexBranchDivergenceMode != 0) {
-   gVortexBranchDivergenceMode = VortexBranchDivergenceMode;
-   gVortexBranchDivergenceOptLevel = getVortexBranchDivergenceOptLevel();
-   setRequiresStructuredCFG(true);
+  if (is_contained(split(FS, ','), "+xvortex") &&
+      VortexBranchDivergenceMode != 0) {
+    gVortexBranchDivergenceMode = VortexBranchDivergenceMode;
+    gVortexBranchDivergenceOptLevel = getVortexBranchDivergenceOptLevel();
+    setRequiresStructuredCFG(true);
   }
 
   if (TT.isOSFuchsia() && !TT.isArch64Bit())

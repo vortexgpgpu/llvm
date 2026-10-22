@@ -213,6 +213,7 @@ class RISCVAsmParser : public MCTargetAsmParser {
   ParseStatus parseGPRPairAsFPR64(OperandVector &Operands);
   template <bool IsRV64Inst> ParseStatus parseGPRPair(OperandVector &Operands);
   ParseStatus parseGPRPair(OperandVector &Operands, bool IsRV64Inst);
+  ParseStatus parseGPRPairXVortexAMOD(OperandVector &Operands);
   ParseStatus parseFRMArg(OperandVector &Operands);
   ParseStatus parseFenceArg(OperandVector &Operands);
   ParseStatus parseReglist(OperandVector &Operands);
@@ -2545,6 +2546,12 @@ ParseStatus RISCVAsmParser::parseGPRPairAsFPR64(OperandVector &Operands) {
 template <bool IsRV64>
 ParseStatus RISCVAsmParser::parseGPRPair(OperandVector &Operands) {
   return parseGPRPair(Operands, IsRV64);
+}
+
+ParseStatus RISCVAsmParser::parseGPRPairXVortexAMOD(OperandVector &Operands) {
+  if (!getSTI().hasFeature(RISCV::FeatureVendorXVortexAMOD))
+    return ParseStatus::NoMatch;
+  return parseGPRPair(Operands, /*IsRV64Inst=*/false);
 }
 
 ParseStatus RISCVAsmParser::parseGPRPair(OperandVector &Operands,

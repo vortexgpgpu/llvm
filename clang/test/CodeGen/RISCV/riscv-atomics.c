@@ -32,3 +32,8 @@ void test_i64_atomics(_Atomic(int64_t) * a, int64_t b) {
   __c11_atomic_fetch_add(a, b, memory_order_seq_cst); // no-atomics-warning {{large atomic operation may incur significant performance penalty; the access size (8 bytes) exceeds the max lock-free size (0 bytes)}}
                                                       // small-atomics-warning@32 {{large atomic operation may incur significant performance penalty; the access size (8 bytes) exceeds the max lock-free size (4 bytes)}}
 }
+
+// XVortexAMOD with Zacas makes the 64-bit atomics lock-free on RV32. (Kept
+// last: the diagnostics above name absolute lines.)
+// RUN: %clang_cc1 -triple riscv32 -target-feature +a -target-feature +zacas \
+// RUN:   -target-feature +xvortexamod -O1 -emit-llvm %s -o - -verify=all-atomics

@@ -720,7 +720,12 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
   }
 
   if (Subtarget.hasStdExtA()) {
-    setMaxAtomicSizeInBitsSupported(Subtarget.getXLen());
+    // XVortexAMOD runs the 64-bit atomics on RV32 (replaceAMO64Results); they
+    // are lock-free only with the 64-bit compare-and-swap of Zacas, which the
+    // operations without an AMO expand to.
+    bool HasAMO64 =
+        Subtarget.hasVendorXVortexAMOD() && Subtarget.hasStdExtZacas();
+    setMaxAtomicSizeInBitsSupported(HasAMO64 ? 64 : Subtarget.getXLen());
     if (Subtarget.hasStdExtZabha() && Subtarget.hasStdExtZacas())
       setMinCmpXchgSizeInBits(8);
     else
@@ -1535,6 +1540,17 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
 
   if (Subtarget.hasStdExtA())
     setOperationAction(ISD::ATOMIC_LOAD_SUB, XLenVT, Expand);
+
+  if (Subtarget.hasStdExtA() && Subtarget.hasVendorXVortexAMOD() &&
+      Subtarget.hasStdExtZacas() && !Subtarget.is64Bit()) {
+    // An atomic store becomes a swap whose old value is dead (x0 pair).
+    setOperationAction(
+        {ISD::ATOMIC_LOAD, ISD::ATOMIC_SWAP, ISD::ATOMIC_LOAD_ADD,
+         ISD::ATOMIC_LOAD_SUB, ISD::ATOMIC_LOAD_AND, ISD::ATOMIC_LOAD_OR,
+         ISD::ATOMIC_LOAD_XOR, ISD::ATOMIC_LOAD_MIN, ISD::ATOMIC_LOAD_MAX,
+         ISD::ATOMIC_LOAD_UMIN, ISD::ATOMIC_LOAD_UMAX, ISD::ATOMIC_CMP_SWAP},
+        MVT::i64, Custom);
+  }
 
   if (Subtarget.hasForcedAtomics()) {
     // Force __sync libcalls to be emitted for atomic rmw/cas operations.
@@ -13116,6 +13132,141 @@ static SDValue customLegalizeToWOpWithSExt(SDNode *N, SelectionDAG &DAG) {
   return DAG.getNode(ISD::TRUNCATE, DL, MVT::i32, NewRes);
 }
 
+// XVortexAMOD: the .D AMOs on register pairs, each in its plain, .aq, .rl and
+// .aqrl forms.
+static ArrayRef<unsigned> getAMO64Opcodes(unsigned ISDOpcode) {
+  static const unsigned Swap[] = {
+      RISCV::AMOSWAP_D_RV32, RISCV::AMOSWAP_D_RV32_AQ, RISCV::AMOSWAP_D_RV32_RL,
+      RISCV::AMOSWAP_D_RV32_AQ_RL};
+  static const unsigned Add[] = {RISCV::AMOADD_D_RV32, RISCV::AMOADD_D_RV32_AQ,
+                                 RISCV::AMOADD_D_RV32_RL,
+                                 RISCV::AMOADD_D_RV32_AQ_RL};
+  static const unsigned And[] = {RISCV::AMOAND_D_RV32, RISCV::AMOAND_D_RV32_AQ,
+                                 RISCV::AMOAND_D_RV32_RL,
+                                 RISCV::AMOAND_D_RV32_AQ_RL};
+  static const unsigned Or[] = {RISCV::AMOOR_D_RV32, RISCV::AMOOR_D_RV32_AQ,
+                                RISCV::AMOOR_D_RV32_RL,
+                                RISCV::AMOOR_D_RV32_AQ_RL};
+  static const unsigned Xor[] = {RISCV::AMOXOR_D_RV32, RISCV::AMOXOR_D_RV32_AQ,
+                                 RISCV::AMOXOR_D_RV32_RL,
+                                 RISCV::AMOXOR_D_RV32_AQ_RL};
+  static const unsigned Min[] = {RISCV::AMOMIN_D_RV32, RISCV::AMOMIN_D_RV32_AQ,
+                                 RISCV::AMOMIN_D_RV32_RL,
+                                 RISCV::AMOMIN_D_RV32_AQ_RL};
+  static const unsigned Max[] = {RISCV::AMOMAX_D_RV32, RISCV::AMOMAX_D_RV32_AQ,
+                                 RISCV::AMOMAX_D_RV32_RL,
+                                 RISCV::AMOMAX_D_RV32_AQ_RL};
+  static const unsigned MinU[] = {
+      RISCV::AMOMINU_D_RV32, RISCV::AMOMINU_D_RV32_AQ, RISCV::AMOMINU_D_RV32_RL,
+      RISCV::AMOMINU_D_RV32_AQ_RL};
+  static const unsigned MaxU[] = {
+      RISCV::AMOMAXU_D_RV32, RISCV::AMOMAXU_D_RV32_AQ, RISCV::AMOMAXU_D_RV32_RL,
+      RISCV::AMOMAXU_D_RV32_AQ_RL};
+  static const unsigned CAS[] = {RISCV::AMOCAS_D_RV32, RISCV::AMOCAS_D_RV32_AQ,
+                                 RISCV::AMOCAS_D_RV32_RL,
+                                 RISCV::AMOCAS_D_RV32_AQ_RL};
+  switch (ISDOpcode) {
+  default:
+    llvm_unreachable("Unexpected XVortexAMOD atomic");
+  case ISD::ATOMIC_SWAP:
+    return Swap;
+  case ISD::ATOMIC_LOAD_ADD:
+  case ISD::ATOMIC_LOAD_SUB:
+    return Add;
+  case ISD::ATOMIC_LOAD_AND:
+    return And;
+  case ISD::ATOMIC_LOAD:
+  case ISD::ATOMIC_LOAD_OR:
+    return Or;
+  case ISD::ATOMIC_LOAD_XOR:
+    return Xor;
+  case ISD::ATOMIC_LOAD_MIN:
+    return Min;
+  case ISD::ATOMIC_LOAD_MAX:
+    return Max;
+  case ISD::ATOMIC_LOAD_UMIN:
+    return MinU;
+  case ISD::ATOMIC_LOAD_UMAX:
+    return MaxU;
+  case ISD::ATOMIC_CMP_SWAP:
+    return CAS;
+  }
+}
+
+// XVortexAMOD: an i64 atomic on RV32 as one .D AMO on register pairs. The
+// ordering picks the aq/rl form, as the RV64 patterns do; the aq/rl bits also
+// order the atomic loads and stores, which AtomicExpand leaves unfenced
+// (shouldInsertFencesForAtomic). A load is amoor.d with the zero pair, a store
+// the type legalizer's swap, whose dead old value goes to the zero pair.
+static void replaceAMO64Results(SDNode *N, SmallVectorImpl<SDValue> &Results,
+                                SelectionDAG &DAG,
+                                const RISCVSubtarget &Subtarget) {
+  auto *AN = cast<AtomicSDNode>(N);
+  SDLoc DL(N);
+  SDValue Addr = AN->getBasePtr();
+  auto BuildPair = [&](SDValue Lo, SDValue Hi) {
+    return DAG.getNode(RISCVISD::BuildGPRPair, DL, MVT::Untyped, Lo, Hi);
+  };
+  auto SplitToPair = [&](SDValue V) {
+    auto [Lo, Hi] = DAG.SplitScalar(V, DL, MVT::i32, MVT::i32);
+    return BuildPair(Lo, Hi);
+  };
+
+  SmallVector<SDValue, 4> Ops;
+  switch (N->getOpcode()) {
+  case ISD::ATOMIC_LOAD:
+    Ops = {Addr, DAG.getRegister(RISCV::X0_Pair, MVT::Untyped)};
+    break;
+  case ISD::ATOMIC_LOAD_SUB: {
+    // amoadd.d of the negated operand.
+    auto [Lo, Hi] = DAG.SplitScalar(N->getOperand(2), DL, MVT::i32, MVT::i32);
+    SDValue Zero = DAG.getConstant(0, DL, MVT::i32);
+    SDValue Borrow = DAG.getSetCC(DL, MVT::i32, Lo, Zero, ISD::SETNE);
+    SDValue NegLo = DAG.getNode(ISD::SUB, DL, MVT::i32, Zero, Lo);
+    SDValue NegHi = DAG.getNode(ISD::SUB, DL, MVT::i32, Zero, Hi);
+    NegHi = DAG.getNode(ISD::SUB, DL, MVT::i32, NegHi, Borrow);
+    Ops = {Addr, BuildPair(NegLo, NegHi)};
+    break;
+  }
+  case ISD::ATOMIC_CMP_SWAP:
+    Ops = {SplitToPair(N->getOperand(2)), Addr, SplitToPair(N->getOperand(3))};
+    break;
+  default:
+    Ops = {Addr, SplitToPair(N->getOperand(2))};
+    break;
+  }
+  Ops.push_back(AN->getChain());
+
+  // The index into getAMO64Opcodes: plain, .aq, .rl, .aqrl.
+  unsigned Form = 0;
+  if (!Subtarget.hasStdExtZtso()) {
+    switch (AN->getMergedOrdering()) {
+    case AtomicOrdering::Acquire:
+      Form = 1;
+      break;
+    case AtomicOrdering::Release:
+      Form = 2;
+      break;
+    case AtomicOrdering::AcquireRelease:
+    case AtomicOrdering::SequentiallyConsistent:
+      Form = 3;
+      break;
+    default:
+      break;
+    }
+  }
+
+  MachineSDNode *AMO =
+      DAG.getMachineNode(getAMO64Opcodes(N->getOpcode())[Form], DL,
+                         DAG.getVTList(MVT::Untyped, MVT::Other), Ops);
+  DAG.setNodeMemRefs(AMO, {AN->getMemOperand()});
+  SDValue Old = DAG.getNode(RISCVISD::SplitGPRPair, DL,
+                            DAG.getVTList(MVT::i32, MVT::i32), SDValue(AMO, 0));
+  Results.push_back(DAG.getNode(ISD::BUILD_PAIR, DL, MVT::i64, Old.getValue(0),
+                                Old.getValue(1)));
+  Results.push_back(SDValue(AMO, 1));
+}
+
 void RISCVTargetLowering::ReplaceNodeResults(SDNode *N,
                                              SmallVectorImpl<SDValue> &Results,
                                              SelectionDAG &DAG) const {
@@ -13123,6 +13274,23 @@ void RISCVTargetLowering::ReplaceNodeResults(SDNode *N,
   switch (N->getOpcode()) {
   default:
     llvm_unreachable("Don't know how to custom type legalize this operation!");
+  case ISD::ATOMIC_LOAD:
+  case ISD::ATOMIC_SWAP:
+  case ISD::ATOMIC_LOAD_ADD:
+  case ISD::ATOMIC_LOAD_SUB:
+  case ISD::ATOMIC_LOAD_AND:
+  case ISD::ATOMIC_LOAD_OR:
+  case ISD::ATOMIC_LOAD_XOR:
+  case ISD::ATOMIC_LOAD_MIN:
+  case ISD::ATOMIC_LOAD_MAX:
+  case ISD::ATOMIC_LOAD_UMIN:
+  case ISD::ATOMIC_LOAD_UMAX:
+  case ISD::ATOMIC_CMP_SWAP:
+    assert(N->getValueType(0) == MVT::i64 && !Subtarget.is64Bit() &&
+           Subtarget.hasVendorXVortexAMOD() && Subtarget.hasStdExtZacas() &&
+           "Unexpected custom legalisation");
+    replaceAMO64Results(N, Results, DAG, Subtarget);
+    return;
   case ISD::STRICT_FP_TO_SINT:
   case ISD::STRICT_FP_TO_UINT:
   case ISD::FP_TO_SINT:
@@ -23195,6 +23363,15 @@ void RISCVTargetLowering::finalizeLowering(MachineFunction &MF) const {
 
 bool RISCVTargetLowering::shouldInsertFencesForAtomic(
     const Instruction *I) const {
+  // XVortexAMOD i64 loads and stores are AMOs, ordered by their aq/rl bits.
+  if (Subtarget.hasVendorXVortexAMOD() && Subtarget.hasStdExtZacas() &&
+      !Subtarget.is64Bit() && (isa<LoadInst>(I) || isa<StoreInst>(I))) {
+    Type *Ty = isa<LoadInst>(I)
+                   ? I->getType()
+                   : cast<StoreInst>(I)->getValueOperand()->getType();
+    if (I->getDataLayout().getTypeSizeInBits(Ty) == 64)
+      return false;
+  }
   if (Subtarget.hasStdExtZalasr()) {
     if (Subtarget.hasStdExtZtso()) {
       // Zalasr + TSO means that atomic_load_acquire and atomic_store_release

@@ -195,8 +195,13 @@ public:
   void setMaxAtomicWidth() override {
     MaxAtomicPromoteWidth = 128;
 
+    // XVortexAMOD runs the 64-bit atomics on register pairs, lock-free with
+    // the 64-bit compare-and-swap of Zacas.
     if (ISAInfo->hasExtension("a"))
-      MaxAtomicInlineWidth = 32;
+      MaxAtomicInlineWidth = ISAInfo->hasExtension("xvortexamod") &&
+                                     ISAInfo->hasExtension("zacas")
+                                 ? 64
+                                 : 32;
   }
 };
 class LLVM_LIBRARY_VISIBILITY RISCV64TargetInfo : public RISCVTargetInfo {

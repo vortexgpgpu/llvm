@@ -1186,6 +1186,17 @@ def HasVendorXVortex
       AssemblerPredicate<(all_of FeatureVendorXVortex),
                          "'XVortex' (Vortex ISA Extension)">;
 
+// The .D atomics on a 32-bit hart (Vortex's AMO64; an ISA-string extension
+// name cannot end in a digit): every 64-bit AMO, and Zacas's amocas.d, on
+// even-aligned register pairs. LR.D/SC.D stay RV64-only.
+def FeatureVendorXVortexAMOD
+    : RISCVExtension<1, 0, "Vortex 64-bit Atomics on RV32",
+                     [FeatureStdExtZaamo]>;
+def HasVendorXVortexAMOD
+    : Predicate<"Subtarget->hasVendorXVortexAMOD()">,
+      AssemblerPredicate<(all_of FeatureVendorXVortexAMOD),
+                         "'XVortexAMOD' (Vortex 64-bit Atomics on RV32)">;
+
 // Core-V Extensions
 
 def FeatureVendorXCVelw
