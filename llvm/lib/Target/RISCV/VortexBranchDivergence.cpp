@@ -1892,31 +1892,25 @@ PreservedAnalyses UniformAnnotationPass::run(Function &F, FunctionAnalysisManage
   // process annotated values
   for (auto Instr : uniformInsts) {
     if (Instr.second) {
-      // handle var_annotation annotations
+      // handle var_annotation annotations: every value read from the
+      // annotated stack variable is uniform, so each load is marked where it
+      // is. (Forwarding one load to all of them would read a single store's
+      // value everywhere, dropping every other store, e.g. a loop induction
+      // variable's update.)
       auto AnnotatedAlloca = reinterpret_cast<AllocaInst*>(Instr.first);
-      std::vector<LoadInst*> loadsToReplace;
-      StoreInst* Store = nullptr;
-
-      // find all loads and stores to the annotated stack variable
-      for (auto User : AnnotatedAlloca->users()) {
-        if (auto LI = dyn_cast<LoadInst>(User)) {
-          loadsToReplace.push_back(LI);
-        }
-        if (auto SI = dyn_cast<StoreInst>(User)) {
-          Store = SI; // the annotation has been applied to the stack variable
-        }
-      }
-      // insert riscv_vx_uniform intrinsic before all uses of collected loads
-      if (Store != nullptr) {
-        IRBuilder<> Builder(Store->getNextNode()); // insert after the store
-        auto LoadedValue = Builder.CreateLoad(AnnotatedAlloca->getAllocatedType(), AnnotatedAlloca, AnnotatedAlloca->getName() + ".loaded");
-        auto ValueType = LoadedValue->getType();
+      SmallVector<LoadInst *, 4> Loads;
+      for (auto User : AnnotatedAlloca->users())
+        if (auto LI = dyn_cast<LoadInst>(User))
+          Loads.push_back(LI);
+      for (auto LI : Loads) {
+        IRBuilder<> Builder(LI->getNextNode());
+        auto ValueType = LI->getType();
         auto IntrinsicFunc = Intrinsic::getDeclaration(F.getParent(), Intrinsic::riscv_vx_uniform, {ValueType, ValueType});
-        auto CallInst = Builder.CreateCall(IntrinsicFunc, {LoadedValue}, LoadedValue->getName() + ".uniform");
-        for (auto LI : loadsToReplace) {
-          LI->replaceAllUsesWith(CallInst);
-          LI->eraseFromParent();
-        }
+        auto CallInst = Builder.CreateCall(IntrinsicFunc,
+                                           {llvm::UndefValue::get(ValueType)},
+                                           LI->getName() + ".uniform");
+        LI->replaceAllUsesWith(CallInst);
+        CallInst->setArgOperand(0, LI);
         changed = true;
       }
     } else {
