@@ -124,6 +124,9 @@ void initializeVortexBranchDivergence2Pass(PassRegistry&);
 ModulePass *createVortexIntrinsicFuncLoweringPass();
 void initializeVortexIntrinsicFuncLoweringPass(PassRegistry&);
 
+FunctionPass *createVortexReconstructionPass();
+void initializeVortexReconstructionPass(PassRegistry&);
+
 FunctionPass *createRISCVPreLegalizerCombiner();
 void initializeRISCVPreLegalizerCombinerPass(PassRegistry &);
 

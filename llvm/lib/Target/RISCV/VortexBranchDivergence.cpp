@@ -65,6 +65,9 @@ using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "vortex-branch-divergence"
 
+// -vortex-branch-opt level (RISCVTargetMachine.cpp)
+extern int gVortexBranchDivergenceOptLevel;
+
 // Complexity guard — the structurization + divergence pipeline (StructurizeCFG
 // in particular) has worst-case exponential behavior on large/complex CFGs.
 // musl printf-family (vfprintf=422 BBs, iconv=227, vfwprintf=149) hangs for
@@ -1877,6 +1880,12 @@ bool DivergenceTracker::isSourceOfDivergence(const Value *V) {
 bool DivergenceTracker::isAlwaysUniform(const Value *V) {
   if (!initialized_) {
     this->initialize();
+  }
+
+  // -vortex-branch-opt=1: no hardware-based always-uniform analysis.
+  if (gVortexBranchDivergenceOptLevel == 1) {
+    LLVM_DEBUG(dbgs() << "*** VX: isAlwaysUniform disabled (vortex-branch-opt=1)\n");
+    return false;
   }
 
   if (auto CB = dyn_cast<CallBase>(V)) {

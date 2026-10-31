@@ -40,6 +40,7 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Vectorize/LoopIdiomVectorize.h"
 #include "VortexBranchDivergence.h"
+#include <cstdlib>
 #include <optional>
 using namespace llvm;
 
@@ -56,6 +57,41 @@ static cl::opt<int> VortexBranchDivergenceMode(
   cl::desc("Set Vortex Branch Divergence Mode"),
   cl::init(1));
 int gVortexBranchDivergenceMode = 0;
+
+// Volt divergence optimization level (ported from the Volt LLVM 18 branch).
+// Each level enables everything below it:
+//   1: basic transformations only (DivergenceTracker::isAlwaysUniform disabled)
+//   2: + hardware-based always-uniform analysis (isAlwaysUniform)
+//   3: + uniform annotations (UniformAnnotationPass at pipeline start)
+//   4: + function-argument / cross-function divergence analysis
+//      (VortexDivergenceAnalysis passes)
+//   8: default (= 4..8, the pipeline of vortex_3.x without this option)
+//   9: + reconstruction pass (VortexReconstructionPass)
+// Level 5 of the Volt paper (zicond, e.g. ternary -> VX_CMOV) is the
+// +zicond target feature and is not gated here.
+// -vortex-branch-opt=<n> takes precedence; otherwise the environment variable
+// VORTEX_DIVERGENCE_OPT_LEVEL is honored (compatibility with the Volt scripts).
+// Values outside 1..9 fall back to 8.
+static cl::opt<int> VortexBranchDivergenceOptLevel(
+  "vortex-branch-opt",
+  cl::desc("Set Vortex Branch Divergence Optimization Level (1-9, default 8; "
+           "env VORTEX_DIVERGENCE_OPT_LEVEL)"),
+  cl::init(8));
+int gVortexBranchDivergenceOptLevel = 8;
+
+static int getVortexBranchDivergenceOptLevel() {
+  int Level = VortexBranchDivergenceOptLevel;
+  if (VortexBranchDivergenceOptLevel.getNumOccurrences() == 0) {
+    if (const char *Env = std::getenv("VORTEX_DIVERGENCE_OPT_LEVEL")) {
+      char *End = nullptr;
+      long V = std::strtol(Env, &End, 10);
+      Level = (End != Env && *End == '\0') ? static_cast<int>(V) : 8;
+    }
+  }
+  if (Level < 1 || Level > 9)
+    Level = 8;
+  return Level;
+}
 
 static cl::opt<int> VortexKernelSchedulerMode(
   "vortex-kernel-scheduler",
@@ -145,6 +181,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   if (VortexBranchDivergenceMode != 0) {
     initializeVortexDivergenceAnalysis0Pass(*PR);
     initializeVortexBranchDivergence0Pass(*PR);
+    initializeVortexReconstructionPass(*PR);
     initializeVortexBranchDivergence1Pass(*PR);
     initializeVortexDivergenceAnalysis1Pass(*PR);
     initializeVortexBranchDivergence2Pass(*PR);
@@ -213,6 +250,7 @@ RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
   if (FS.contains("+xvortex")
    && VortexBranchDivergenceMode != 0) {
    gVortexBranchDivergenceMode = VortexBranchDivergenceMode;
+   gVortexBranchDivergenceOptLevel = getVortexBranchDivergenceOptLevel();
    setRequiresStructuredCFG(true);
   }
 
@@ -536,13 +574,24 @@ bool RISCVPassConfig::addPreISel() {
     addPass(createCFGSimplificationPass());
     addPass(createLowerSwitchPass());
     addPass(createLoopSimplifyPass());
+    if (gVortexBranchDivergenceOptLevel >= 9) {
+      addPass(createVortexReconstructionPass());
+      // Clean up after cloning; SimplifyCFG may form switches again, so lower
+      // them before the divergence passes (see above).
+      addPass(createCFGSimplificationPass());
+      addPass(createLowerSwitchPass());
+      addPass(createLoopSimplifyPass());
+    }
     addPass(createUnifyLoopExitsPass());
-    addPass(createVortexDivergenceAnalysis0Pass());
+    if (gVortexBranchDivergenceOptLevel >= 4)
+      addPass(createVortexDivergenceAnalysis0Pass());
     addPass(createVortexBranchDivergence0Pass());
     addPass(createStructurizeCFGPass(true, (gVortexBranchDivergenceMode == 1)));
-    addPass(createVortexDivergenceAnalysis0Pass());
+    if (gVortexBranchDivergenceOptLevel >= 4)
+      addPass(createVortexDivergenceAnalysis0Pass());
     addPass(createVortexBranchDivergence1Pass(gVortexBranchDivergenceMode));
-    addPass(createVortexDivergenceAnalysis1Pass());
+    if (gVortexBranchDivergenceOptLevel >= 4)
+      addPass(createVortexDivergenceAnalysis1Pass());
   }
   if (VortexKernelSchedulerMode != 0) {
     addPass(createVortexIntrinsicFuncLoweringPass());
@@ -691,7 +740,8 @@ void RISCVTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
     LPM.addPass(LoopIdiomVectorizePass(LoopIdiomVectorizeStyle::Predicated));
   });
 
-  if (gVortexBranchDivergenceMode != 0) {
+  if (gVortexBranchDivergenceMode != 0 &&
+      gVortexBranchDivergenceOptLevel >= 3) {
     PB.registerPipelineStartEPCallback(
       [this](ModulePassManager &PM, OptimizationLevel Level) {
         FunctionPassManager FPM;
