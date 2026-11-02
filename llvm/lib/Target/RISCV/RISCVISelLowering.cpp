@@ -179,14 +179,15 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
             ISD::FEXP2, ISD::FLOG, ISD::FLOG2, ISD::FLOG10, ISD::FSIN,
             ISD::FCOS, ISD::FPOW})
         setOperationAction(Op, VT, Expand);
-      // Narrow-element vector memory accesses (e.g. OpenCL char2/short8)
-      // reach the grouped types as truncating stores / extending loads after
-      // type promotion. XVortex has no packed narrow accesses; expand them
-      // into per-lane scalar code. Without this, `store trunc to v2i8` /
-      // `load anyext from v8i16` hit "Cannot select".
+      // Narrow-element vector memory accesses (e.g. OpenCL char2/short8, or
+      // a v4i1 bit vector) reach the grouped types as truncating stores /
+      // extending loads after type promotion. XVortex has no packed narrow
+      // accesses; expand them into per-lane scalar code (i1 lanes packed into
+      // bits). Without this, `store trunc to v2i8` / `load anyext from v8i16`
+      // hit "Cannot select", and a store to v4i1 an assertion.
       if (VT.isInteger()) {
         MVT EltVT = VT.getVectorElementType();
-        for (MVT NarrowEltVT : {MVT::i8, MVT::i16, MVT::i32}) {
+        for (MVT NarrowEltVT : {MVT::i1, MVT::i8, MVT::i16, MVT::i32}) {
           if (!NarrowEltVT.bitsLT(EltVT))
             continue;
           MVT MemVT = MVT::getVectorVT(NarrowEltVT, VT.getVectorElementCount());

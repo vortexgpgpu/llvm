@@ -364,6 +364,29 @@ define <8 x i8> @fwd_v8i8(<8 x i8> %v) {
   ret <8 x i8> %r
 }
 
+declare <4 x i1> @callee_v4i1(<4 x i1>)
+
+define <4 x i1> @fwd_v4i1(<4 x i1> %v) {
+; ILP32F-LABEL: name: fwd_v4i1
+; ILP32F: liveins: $x10, $x11{{$}}
+; ILP32F: PseudoCALL target-flags(riscv-call) @callee_v4i1, csr_ilp32f_lp64f, implicit-def dead $x1, implicit $x10, implicit $x11, implicit-def $x2{{$}}
+; ILP32F: PseudoRET{{$}}
+; ILP32-LABEL: name: fwd_v4i1
+; ILP32: liveins: $x10, $x11{{$}}
+; ILP32: PseudoCALL target-flags(riscv-call) @callee_v4i1, csr_ilp32_lp64, implicit-def dead $x1, implicit $x10, implicit $x11, implicit-def $x2{{$}}
+; ILP32: PseudoRET{{$}}
+; LP64D-LABEL: name: fwd_v4i1
+; LP64D: liveins: $x10, $x11{{$}}
+; LP64D: PseudoCALL target-flags(riscv-call) @callee_v4i1, csr_ilp32d_lp64d, implicit-def dead $x1, implicit $x10, implicit $x11, implicit-def $x2{{$}}
+; LP64D: PseudoRET{{$}}
+; LP64-LABEL: name: fwd_v4i1
+; LP64: liveins: $x10, $x11{{$}}
+; LP64: PseudoCALL target-flags(riscv-call) @callee_v4i1, csr_ilp32_lp64, implicit-def dead $x1, implicit $x10, implicit $x11, implicit-def $x2{{$}}
+; LP64: PseudoRET{{$}}
+  %r = call <4 x i1> @callee_v4i1(<4 x i1> %v)
+  ret <4 x i1> %r
+}
+
 declare <2 x half> @callee_v2f16(<2 x half>)
 
 define <2 x half> @fwd_v2f16(<2 x half> %v) {
