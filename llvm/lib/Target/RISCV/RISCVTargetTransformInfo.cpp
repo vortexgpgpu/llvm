@@ -30,13 +30,6 @@ static cl::opt<unsigned> RVVRegisterWidthLMUL(
         "by autovectorized code. Fractional LMULs are not supported."),
     cl::init(2), cl::Hidden);
 
-static cl::opt<bool> VortexWideLSV(
-    "riscv-vortex-wide-lsv",
-    cl::desc("Let the LoadStoreVectorizer merge XVortex float accesses into "
-             "vx_flw.d/.q and vx_fsw.d/.q (explicit vector accesses use them "
-             "either way)"),
-    cl::init(true), cl::Hidden);
-
 static cl::opt<unsigned> SLPMaxVF(
     "riscv-v-slp-max-vf",
     cl::desc(
@@ -2654,7 +2647,7 @@ RISCVTTIImpl::enableMemCmpExpansion(bool OptSize, bool IsZeroCmp) const {
 // load and store chains of 2 or 4 words. Integer, volatile and atomic accesses
 // stay scalar (the vectorizer itself skips the last two).
 bool RISCVTTIImpl::useVortexWideLSV() const {
-  return ST->hasVortexWideMem() && VortexWideLSV;
+  return ST->useVortexWideMerging();
 }
 
 unsigned RISCVTTIImpl::getLoadStoreVecRegBitWidth(unsigned AddrSpace) const {

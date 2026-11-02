@@ -2673,6 +2673,25 @@ RISCVTargetLowering::decomposeSubvectorInsertExtractToSubRegs(
 
 // Permit combining of mask vectors as BUILD_VECTOR never expands to scalar
 // stores for those types.
+static bool getXVortexGroupLanes(const TargetLowering &TLI, MVT VT,
+                                 unsigned &RCID, MVT &ElemVT,
+                                 ArrayRef<unsigned> &SubRegs);
+
+// No store merging into an XVortex register group: a v2f32/v4f32 store
+// becomes vx_fsw.d/.q, which -riscv-vortex-wide-lsv=false rules out for
+// scalar source code (the LoadStoreVectorizer, which that option gates,
+// already merges such stores in the IR), and any other group store is
+// lowered back to scalar stores, after building the group first.
+bool RISCVTargetLowering::canMergeStoresTo(unsigned AddressSpace, EVT MemVT,
+                                           const MachineFunction &MF) const {
+  unsigned RCID;
+  MVT ElemVT;
+  ArrayRef<unsigned> SubRegs;
+  return !(Subtarget.hasVendorXVortex() && MemVT.isSimple() &&
+           getXVortexGroupLanes(*this, MemVT.getSimpleVT(), RCID, ElemVT,
+                                SubRegs));
+}
+
 bool RISCVTargetLowering::mergeStoresAfterLegalization(EVT VT) const {
   return !Subtarget.useRVVForFixedLengthVectors() ||
          (VT.isFixedLengthVector() && VT.getVectorElementType() == MVT::i1);
@@ -6927,7 +6946,12 @@ static SDValue lowerXVortexGroupedStore(SDValue Op, SelectionDAG &DAG,
   SDValue BasePtr = Store->getBasePtr();
   auto *MMO = Store->getMemOperand();
 
-  if (!Store->isTruncatingStore() && isXVortexWideAccess(VT, Store, Subtarget))
+  // A vector of constants stores best as scalars, each from an integer
+  // register or x0, rather than built into FP registers first.
+  bool ConstantLanes = ISD::isBuildVectorOfConstantFPSDNodes(Val.getNode()) ||
+                       ISD::isBuildVectorOfConstantSDNodes(Val.getNode());
+  if (!Store->isTruncatingStore() && !ConstantLanes &&
+      isXVortexWideAccess(VT, Store, Subtarget))
     return DAG.getMemIntrinsicNode(RISCVISD::VX_FSW, DL,
                                    DAG.getVTList(MVT::Other),
                                    {Chain, Val, BasePtr}, VT, MMO);
@@ -6935,7 +6959,8 @@ static SDValue lowerXVortexGroupedStore(SDValue Op, SelectionDAG &DAG,
   SmallVector<SDValue, 8> StoreChains;
   for (unsigned i = 0; i < NumElts; ++i) {
     SDValue Lane =
-        DAG.getTargetExtractSubreg(SubRegs[i], DL, ElemVT, Val);
+        ConstantLanes ? Val.getOperand(i)
+                      : DAG.getTargetExtractSubreg(SubRegs[i], DL, ElemVT, Val);
     SDValue Addr = BasePtr;
     if (i > 0)
       Addr = DAG.getNode(ISD::ADD, DL, XLenVT, BasePtr,

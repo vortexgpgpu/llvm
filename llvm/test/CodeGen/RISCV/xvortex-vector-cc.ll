@@ -3,9 +3,14 @@
 ; RUN:   -verify-machineinstrs < %s | FileCheck %s --check-prefix=ILP32F
 ; RUN: llc -mtriple=riscv32 -mattr=+m,+f,+xvortex -target-abi=ilp32 \
 ; RUN:   -verify-machineinstrs < %s | FileCheck %s --check-prefix=ILP32
+; RUN: llc -mtriple=riscv32 -mattr=+m,+f -target-abi=ilp32f \
+; RUN:   -verify-machineinstrs < %s | FileCheck %s --check-prefix=NOVX-ILP32F
+; RUN: llc -mtriple=riscv32 -mattr=+m,+f -target-abi=ilp32 \
+; RUN:   -verify-machineinstrs < %s | FileCheck %s --check-prefix=NOVX-ILP32
 
 ; XVortex keeps v2f32/v4f32/v4i32 in register groups, but the calling
-; convention passes and returns them element by element, as without XVortex.
+; convention passes and returns them element by element, in the same
+; registers and stack slots as without XVortex (the NOVX runs).
 
 define float @arg_v4f32(<4 x float> %v) {
 ; ILP32F-LABEL: arg_v4f32:
@@ -20,6 +25,19 @@ define float @arg_v4f32(<4 x float> %v) {
 ; ILP32-NEXT:    fadd.s fa5, fa4, fa5
 ; ILP32-NEXT:    fmv.x.w a0, fa5
 ; ILP32-NEXT:    ret
+;
+; NOVX-ILP32F-LABEL: arg_v4f32:
+; NOVX-ILP32F:       # %bb.0:
+; NOVX-ILP32F-NEXT:    fadd.s fa0, fa0, fa3
+; NOVX-ILP32F-NEXT:    ret
+;
+; NOVX-ILP32-LABEL: arg_v4f32:
+; NOVX-ILP32:       # %bb.0:
+; NOVX-ILP32-NEXT:    fmv.w.x fa5, a3
+; NOVX-ILP32-NEXT:    fmv.w.x fa4, a0
+; NOVX-ILP32-NEXT:    fadd.s fa5, fa4, fa5
+; NOVX-ILP32-NEXT:    fmv.x.w a0, fa5
+; NOVX-ILP32-NEXT:    ret
   %a = extractelement <4 x float> %v, i32 0
   %d = extractelement <4 x float> %v, i32 3
   %r = fadd float %a, %d
@@ -39,6 +57,19 @@ define float @arg_v2f32(<2 x float> %v) {
 ; ILP32-NEXT:    fsub.s fa5, fa4, fa5
 ; ILP32-NEXT:    fmv.x.w a0, fa5
 ; ILP32-NEXT:    ret
+;
+; NOVX-ILP32F-LABEL: arg_v2f32:
+; NOVX-ILP32F:       # %bb.0:
+; NOVX-ILP32F-NEXT:    fsub.s fa0, fa0, fa1
+; NOVX-ILP32F-NEXT:    ret
+;
+; NOVX-ILP32-LABEL: arg_v2f32:
+; NOVX-ILP32:       # %bb.0:
+; NOVX-ILP32-NEXT:    fmv.w.x fa5, a1
+; NOVX-ILP32-NEXT:    fmv.w.x fa4, a0
+; NOVX-ILP32-NEXT:    fsub.s fa5, fa4, fa5
+; NOVX-ILP32-NEXT:    fmv.x.w a0, fa5
+; NOVX-ILP32-NEXT:    ret
   %a = extractelement <2 x float> %v, i32 0
   %b = extractelement <2 x float> %v, i32 1
   %r = fsub float %a, %b
@@ -59,6 +90,20 @@ define i32 @arg_v4i32(<4 x i32> %v) {
 ; ILP32-NEXT:    lw a0, 12(a0)
 ; ILP32-NEXT:    sub a0, a1, a0
 ; ILP32-NEXT:    ret
+;
+; NOVX-ILP32F-LABEL: arg_v4i32:
+; NOVX-ILP32F:       # %bb.0:
+; NOVX-ILP32F-NEXT:    lw a1, 4(a0)
+; NOVX-ILP32F-NEXT:    lw a0, 12(a0)
+; NOVX-ILP32F-NEXT:    sub a0, a1, a0
+; NOVX-ILP32F-NEXT:    ret
+;
+; NOVX-ILP32-LABEL: arg_v4i32:
+; NOVX-ILP32:       # %bb.0:
+; NOVX-ILP32-NEXT:    lw a1, 4(a0)
+; NOVX-ILP32-NEXT:    lw a0, 12(a0)
+; NOVX-ILP32-NEXT:    sub a0, a1, a0
+; NOVX-ILP32-NEXT:    ret
   %a = extractelement <4 x i32> %v, i32 1
   %d = extractelement <4 x i32> %v, i32 3
   %r = sub i32 %a, %d
@@ -77,6 +122,30 @@ define <4 x float> @ret_v4f32(ptr %p) {
 ; ILP32-NEXT:    vx_flw.q fs0, 0(a1)
 ; ILP32-NEXT:    vx_fsw.q fs0, 0(a0)
 ; ILP32-NEXT:    ret
+;
+; NOVX-ILP32F-LABEL: ret_v4f32:
+; NOVX-ILP32F:       # %bb.0:
+; NOVX-ILP32F-NEXT:    flw fa5, 0(a1)
+; NOVX-ILP32F-NEXT:    flw fa4, 4(a1)
+; NOVX-ILP32F-NEXT:    flw fa3, 8(a1)
+; NOVX-ILP32F-NEXT:    flw fa2, 12(a1)
+; NOVX-ILP32F-NEXT:    fsw fa5, 0(a0)
+; NOVX-ILP32F-NEXT:    fsw fa4, 4(a0)
+; NOVX-ILP32F-NEXT:    fsw fa3, 8(a0)
+; NOVX-ILP32F-NEXT:    fsw fa2, 12(a0)
+; NOVX-ILP32F-NEXT:    ret
+;
+; NOVX-ILP32-LABEL: ret_v4f32:
+; NOVX-ILP32:       # %bb.0:
+; NOVX-ILP32-NEXT:    flw fa5, 0(a1)
+; NOVX-ILP32-NEXT:    flw fa4, 4(a1)
+; NOVX-ILP32-NEXT:    flw fa3, 8(a1)
+; NOVX-ILP32-NEXT:    flw fa2, 12(a1)
+; NOVX-ILP32-NEXT:    fsw fa5, 0(a0)
+; NOVX-ILP32-NEXT:    fsw fa4, 4(a0)
+; NOVX-ILP32-NEXT:    fsw fa3, 8(a0)
+; NOVX-ILP32-NEXT:    fsw fa2, 12(a0)
+; NOVX-ILP32-NEXT:    ret
   %v = load <4 x float>, ptr %p, align 16
   ret <4 x float> %v
 }
@@ -93,6 +162,19 @@ define <2 x float> @ret_v2f32(ptr %p) {
 ; ILP32-NEXT:    fmv.x.w a0, fa0
 ; ILP32-NEXT:    fmv.x.w a1, fa1
 ; ILP32-NEXT:    ret
+;
+; NOVX-ILP32F-LABEL: ret_v2f32:
+; NOVX-ILP32F:       # %bb.0:
+; NOVX-ILP32F-NEXT:    flw fa0, 0(a0)
+; NOVX-ILP32F-NEXT:    flw fa1, 4(a0)
+; NOVX-ILP32F-NEXT:    ret
+;
+; NOVX-ILP32-LABEL: ret_v2f32:
+; NOVX-ILP32:       # %bb.0:
+; NOVX-ILP32-NEXT:    lw a2, 0(a0)
+; NOVX-ILP32-NEXT:    lw a1, 4(a0)
+; NOVX-ILP32-NEXT:    mv a0, a2
+; NOVX-ILP32-NEXT:    ret
   %v = load <2 x float>, ptr %p, align 8
   ret <2 x float> %v
 }
@@ -121,6 +203,30 @@ define <4 x i32> @ret_v4i32(ptr %p) {
 ; ILP32-NEXT:    sw a4, 8(a0)
 ; ILP32-NEXT:    sw a5, 12(a0)
 ; ILP32-NEXT:    ret
+;
+; NOVX-ILP32F-LABEL: ret_v4i32:
+; NOVX-ILP32F:       # %bb.0:
+; NOVX-ILP32F-NEXT:    lw a2, 0(a1)
+; NOVX-ILP32F-NEXT:    lw a3, 4(a1)
+; NOVX-ILP32F-NEXT:    lw a4, 8(a1)
+; NOVX-ILP32F-NEXT:    lw a1, 12(a1)
+; NOVX-ILP32F-NEXT:    sw a2, 0(a0)
+; NOVX-ILP32F-NEXT:    sw a3, 4(a0)
+; NOVX-ILP32F-NEXT:    sw a4, 8(a0)
+; NOVX-ILP32F-NEXT:    sw a1, 12(a0)
+; NOVX-ILP32F-NEXT:    ret
+;
+; NOVX-ILP32-LABEL: ret_v4i32:
+; NOVX-ILP32:       # %bb.0:
+; NOVX-ILP32-NEXT:    lw a2, 0(a1)
+; NOVX-ILP32-NEXT:    lw a3, 4(a1)
+; NOVX-ILP32-NEXT:    lw a4, 8(a1)
+; NOVX-ILP32-NEXT:    lw a1, 12(a1)
+; NOVX-ILP32-NEXT:    sw a2, 0(a0)
+; NOVX-ILP32-NEXT:    sw a3, 4(a0)
+; NOVX-ILP32-NEXT:    sw a4, 8(a0)
+; NOVX-ILP32-NEXT:    sw a1, 12(a0)
+; NOVX-ILP32-NEXT:    ret
   %v = load <4 x i32>, ptr %p, align 16
   ret <4 x i32> %v
 }
@@ -184,6 +290,72 @@ define void @call_v4f32(ptr %p, ptr %q) {
 ; ILP32-NEXT:    addi sp, sp, 32
 ; ILP32-NEXT:    .cfi_def_cfa_offset 0
 ; ILP32-NEXT:    ret
+;
+; NOVX-ILP32F-LABEL: call_v4f32:
+; NOVX-ILP32F:       # %bb.0:
+; NOVX-ILP32F-NEXT:    addi sp, sp, -32
+; NOVX-ILP32F-NEXT:    .cfi_def_cfa_offset 32
+; NOVX-ILP32F-NEXT:    sw ra, 28(sp) # 4-byte Folded Spill
+; NOVX-ILP32F-NEXT:    sw s0, 24(sp) # 4-byte Folded Spill
+; NOVX-ILP32F-NEXT:    .cfi_offset ra, -4
+; NOVX-ILP32F-NEXT:    .cfi_offset s0, -8
+; NOVX-ILP32F-NEXT:    mv s0, a0
+; NOVX-ILP32F-NEXT:    flw fa0, 0(a0)
+; NOVX-ILP32F-NEXT:    flw fa1, 4(a0)
+; NOVX-ILP32F-NEXT:    flw fa2, 8(a0)
+; NOVX-ILP32F-NEXT:    flw fa3, 12(a0)
+; NOVX-ILP32F-NEXT:    flw fa4, 0(a1)
+; NOVX-ILP32F-NEXT:    flw fa5, 4(a1)
+; NOVX-ILP32F-NEXT:    mv a0, sp
+; NOVX-ILP32F-NEXT:    call callee_v4f32
+; NOVX-ILP32F-NEXT:    flw fa5, 0(sp)
+; NOVX-ILP32F-NEXT:    flw fa4, 4(sp)
+; NOVX-ILP32F-NEXT:    flw fa3, 8(sp)
+; NOVX-ILP32F-NEXT:    flw fa2, 12(sp)
+; NOVX-ILP32F-NEXT:    fsw fa5, 0(s0)
+; NOVX-ILP32F-NEXT:    fsw fa4, 4(s0)
+; NOVX-ILP32F-NEXT:    fsw fa3, 8(s0)
+; NOVX-ILP32F-NEXT:    fsw fa2, 12(s0)
+; NOVX-ILP32F-NEXT:    lw ra, 28(sp) # 4-byte Folded Reload
+; NOVX-ILP32F-NEXT:    lw s0, 24(sp) # 4-byte Folded Reload
+; NOVX-ILP32F-NEXT:    .cfi_restore ra
+; NOVX-ILP32F-NEXT:    .cfi_restore s0
+; NOVX-ILP32F-NEXT:    addi sp, sp, 32
+; NOVX-ILP32F-NEXT:    .cfi_def_cfa_offset 0
+; NOVX-ILP32F-NEXT:    ret
+;
+; NOVX-ILP32-LABEL: call_v4f32:
+; NOVX-ILP32:       # %bb.0:
+; NOVX-ILP32-NEXT:    addi sp, sp, -32
+; NOVX-ILP32-NEXT:    .cfi_def_cfa_offset 32
+; NOVX-ILP32-NEXT:    sw ra, 28(sp) # 4-byte Folded Spill
+; NOVX-ILP32-NEXT:    sw s0, 24(sp) # 4-byte Folded Spill
+; NOVX-ILP32-NEXT:    .cfi_offset ra, -4
+; NOVX-ILP32-NEXT:    .cfi_offset s0, -8
+; NOVX-ILP32-NEXT:    mv s0, a0
+; NOVX-ILP32-NEXT:    lw a5, 0(a1)
+; NOVX-ILP32-NEXT:    lw a6, 4(a1)
+; NOVX-ILP32-NEXT:    lw a1, 0(a0)
+; NOVX-ILP32-NEXT:    lw a2, 4(a0)
+; NOVX-ILP32-NEXT:    lw a3, 8(a0)
+; NOVX-ILP32-NEXT:    lw a4, 12(a0)
+; NOVX-ILP32-NEXT:    mv a0, sp
+; NOVX-ILP32-NEXT:    call callee_v4f32
+; NOVX-ILP32-NEXT:    flw fa5, 0(sp)
+; NOVX-ILP32-NEXT:    flw fa4, 4(sp)
+; NOVX-ILP32-NEXT:    flw fa3, 8(sp)
+; NOVX-ILP32-NEXT:    flw fa2, 12(sp)
+; NOVX-ILP32-NEXT:    fsw fa5, 0(s0)
+; NOVX-ILP32-NEXT:    fsw fa4, 4(s0)
+; NOVX-ILP32-NEXT:    fsw fa3, 8(s0)
+; NOVX-ILP32-NEXT:    fsw fa2, 12(s0)
+; NOVX-ILP32-NEXT:    lw ra, 28(sp) # 4-byte Folded Reload
+; NOVX-ILP32-NEXT:    lw s0, 24(sp) # 4-byte Folded Reload
+; NOVX-ILP32-NEXT:    .cfi_restore ra
+; NOVX-ILP32-NEXT:    .cfi_restore s0
+; NOVX-ILP32-NEXT:    addi sp, sp, 32
+; NOVX-ILP32-NEXT:    .cfi_def_cfa_offset 0
+; NOVX-ILP32-NEXT:    ret
   %v = load <4 x float>, ptr %p, align 16
   %w = load <2 x float>, ptr %q, align 8
   %r = call <4 x float> @callee_v4f32(<4 x float> %v, <2 x float> %w)
@@ -194,10 +366,10 @@ define void @call_v4f32(ptr %p, ptr %q) {
 define void @call_v4i32(ptr %p) {
 ; ILP32F-LABEL: call_v4i32:
 ; ILP32F:       # %bb.0:
-; ILP32F-NEXT:    addi sp, sp, -48
-; ILP32F-NEXT:    .cfi_def_cfa_offset 48
-; ILP32F-NEXT:    sw ra, 44(sp) # 4-byte Folded Spill
-; ILP32F-NEXT:    sw s0, 40(sp) # 4-byte Folded Spill
+; ILP32F-NEXT:    addi sp, sp, -64
+; ILP32F-NEXT:    .cfi_def_cfa_offset 64
+; ILP32F-NEXT:    sw ra, 60(sp) # 4-byte Folded Spill
+; ILP32F-NEXT:    sw s0, 56(sp) # 4-byte Folded Spill
 ; ILP32F-NEXT:    .cfi_offset ra, -4
 ; ILP32F-NEXT:    .cfi_offset s0, -8
 ; ILP32F-NEXT:    mv s0, a0
@@ -205,35 +377,35 @@ define void @call_v4i32(ptr %p) {
 ; ILP32F-NEXT:    lw a3, 4(a0)
 ; ILP32F-NEXT:    lw a4, 8(a0)
 ; ILP32F-NEXT:    lw a5, 12(a0)
-; ILP32F-NEXT:    addi a0, sp, 16
-; ILP32F-NEXT:    mv a1, sp
-; ILP32F-NEXT:    sw a2, 0(sp)
-; ILP32F-NEXT:    sw a3, 4(sp)
-; ILP32F-NEXT:    sw a4, 8(sp)
-; ILP32F-NEXT:    sw a5, 12(sp)
+; ILP32F-NEXT:    addi a0, sp, 32
+; ILP32F-NEXT:    addi a1, sp, 16
+; ILP32F-NEXT:    sw a2, 16(sp)
+; ILP32F-NEXT:    sw a3, 20(sp)
+; ILP32F-NEXT:    sw a4, 24(sp)
+; ILP32F-NEXT:    sw a5, 28(sp)
 ; ILP32F-NEXT:    call callee_v4i32
-; ILP32F-NEXT:    lw a2, 16(sp)
-; ILP32F-NEXT:    lw a3, 20(sp)
-; ILP32F-NEXT:    lw a4, 24(sp)
-; ILP32F-NEXT:    lw a5, 28(sp)
+; ILP32F-NEXT:    lw a2, 32(sp)
+; ILP32F-NEXT:    lw a3, 36(sp)
+; ILP32F-NEXT:    lw a4, 40(sp)
+; ILP32F-NEXT:    lw a5, 44(sp)
 ; ILP32F-NEXT:    sw a2, 0(s0)
 ; ILP32F-NEXT:    sw a3, 4(s0)
 ; ILP32F-NEXT:    sw a4, 8(s0)
 ; ILP32F-NEXT:    sw a5, 12(s0)
-; ILP32F-NEXT:    lw ra, 44(sp) # 4-byte Folded Reload
-; ILP32F-NEXT:    lw s0, 40(sp) # 4-byte Folded Reload
+; ILP32F-NEXT:    lw ra, 60(sp) # 4-byte Folded Reload
+; ILP32F-NEXT:    lw s0, 56(sp) # 4-byte Folded Reload
 ; ILP32F-NEXT:    .cfi_restore ra
 ; ILP32F-NEXT:    .cfi_restore s0
-; ILP32F-NEXT:    addi sp, sp, 48
+; ILP32F-NEXT:    addi sp, sp, 64
 ; ILP32F-NEXT:    .cfi_def_cfa_offset 0
 ; ILP32F-NEXT:    ret
 ;
 ; ILP32-LABEL: call_v4i32:
 ; ILP32:       # %bb.0:
-; ILP32-NEXT:    addi sp, sp, -48
-; ILP32-NEXT:    .cfi_def_cfa_offset 48
-; ILP32-NEXT:    sw ra, 44(sp) # 4-byte Folded Spill
-; ILP32-NEXT:    sw s0, 40(sp) # 4-byte Folded Spill
+; ILP32-NEXT:    addi sp, sp, -64
+; ILP32-NEXT:    .cfi_def_cfa_offset 64
+; ILP32-NEXT:    sw ra, 60(sp) # 4-byte Folded Spill
+; ILP32-NEXT:    sw s0, 56(sp) # 4-byte Folded Spill
 ; ILP32-NEXT:    .cfi_offset ra, -4
 ; ILP32-NEXT:    .cfi_offset s0, -8
 ; ILP32-NEXT:    mv s0, a0
@@ -241,28 +413,100 @@ define void @call_v4i32(ptr %p) {
 ; ILP32-NEXT:    lw a3, 4(a0)
 ; ILP32-NEXT:    lw a4, 8(a0)
 ; ILP32-NEXT:    lw a5, 12(a0)
-; ILP32-NEXT:    addi a0, sp, 16
-; ILP32-NEXT:    mv a1, sp
-; ILP32-NEXT:    sw a2, 0(sp)
-; ILP32-NEXT:    sw a3, 4(sp)
-; ILP32-NEXT:    sw a4, 8(sp)
-; ILP32-NEXT:    sw a5, 12(sp)
+; ILP32-NEXT:    addi a0, sp, 32
+; ILP32-NEXT:    addi a1, sp, 16
+; ILP32-NEXT:    sw a2, 16(sp)
+; ILP32-NEXT:    sw a3, 20(sp)
+; ILP32-NEXT:    sw a4, 24(sp)
+; ILP32-NEXT:    sw a5, 28(sp)
 ; ILP32-NEXT:    call callee_v4i32
-; ILP32-NEXT:    lw a2, 16(sp)
-; ILP32-NEXT:    lw a3, 20(sp)
-; ILP32-NEXT:    lw a4, 24(sp)
-; ILP32-NEXT:    lw a5, 28(sp)
+; ILP32-NEXT:    lw a2, 32(sp)
+; ILP32-NEXT:    lw a3, 36(sp)
+; ILP32-NEXT:    lw a4, 40(sp)
+; ILP32-NEXT:    lw a5, 44(sp)
 ; ILP32-NEXT:    sw a2, 0(s0)
 ; ILP32-NEXT:    sw a3, 4(s0)
 ; ILP32-NEXT:    sw a4, 8(s0)
 ; ILP32-NEXT:    sw a5, 12(s0)
-; ILP32-NEXT:    lw ra, 44(sp) # 4-byte Folded Reload
-; ILP32-NEXT:    lw s0, 40(sp) # 4-byte Folded Reload
+; ILP32-NEXT:    lw ra, 60(sp) # 4-byte Folded Reload
+; ILP32-NEXT:    lw s0, 56(sp) # 4-byte Folded Reload
 ; ILP32-NEXT:    .cfi_restore ra
 ; ILP32-NEXT:    .cfi_restore s0
-; ILP32-NEXT:    addi sp, sp, 48
+; ILP32-NEXT:    addi sp, sp, 64
 ; ILP32-NEXT:    .cfi_def_cfa_offset 0
 ; ILP32-NEXT:    ret
+;
+; NOVX-ILP32F-LABEL: call_v4i32:
+; NOVX-ILP32F:       # %bb.0:
+; NOVX-ILP32F-NEXT:    addi sp, sp, -48
+; NOVX-ILP32F-NEXT:    .cfi_def_cfa_offset 48
+; NOVX-ILP32F-NEXT:    sw ra, 44(sp) # 4-byte Folded Spill
+; NOVX-ILP32F-NEXT:    sw s0, 40(sp) # 4-byte Folded Spill
+; NOVX-ILP32F-NEXT:    .cfi_offset ra, -4
+; NOVX-ILP32F-NEXT:    .cfi_offset s0, -8
+; NOVX-ILP32F-NEXT:    mv s0, a0
+; NOVX-ILP32F-NEXT:    lw a2, 0(a0)
+; NOVX-ILP32F-NEXT:    lw a3, 4(a0)
+; NOVX-ILP32F-NEXT:    lw a4, 8(a0)
+; NOVX-ILP32F-NEXT:    lw a5, 12(a0)
+; NOVX-ILP32F-NEXT:    addi a0, sp, 16
+; NOVX-ILP32F-NEXT:    mv a1, sp
+; NOVX-ILP32F-NEXT:    sw a2, 0(sp)
+; NOVX-ILP32F-NEXT:    sw a3, 4(sp)
+; NOVX-ILP32F-NEXT:    sw a4, 8(sp)
+; NOVX-ILP32F-NEXT:    sw a5, 12(sp)
+; NOVX-ILP32F-NEXT:    call callee_v4i32
+; NOVX-ILP32F-NEXT:    lw a0, 16(sp)
+; NOVX-ILP32F-NEXT:    lw a1, 20(sp)
+; NOVX-ILP32F-NEXT:    lw a2, 24(sp)
+; NOVX-ILP32F-NEXT:    lw a3, 28(sp)
+; NOVX-ILP32F-NEXT:    sw a0, 0(s0)
+; NOVX-ILP32F-NEXT:    sw a1, 4(s0)
+; NOVX-ILP32F-NEXT:    sw a2, 8(s0)
+; NOVX-ILP32F-NEXT:    sw a3, 12(s0)
+; NOVX-ILP32F-NEXT:    lw ra, 44(sp) # 4-byte Folded Reload
+; NOVX-ILP32F-NEXT:    lw s0, 40(sp) # 4-byte Folded Reload
+; NOVX-ILP32F-NEXT:    .cfi_restore ra
+; NOVX-ILP32F-NEXT:    .cfi_restore s0
+; NOVX-ILP32F-NEXT:    addi sp, sp, 48
+; NOVX-ILP32F-NEXT:    .cfi_def_cfa_offset 0
+; NOVX-ILP32F-NEXT:    ret
+;
+; NOVX-ILP32-LABEL: call_v4i32:
+; NOVX-ILP32:       # %bb.0:
+; NOVX-ILP32-NEXT:    addi sp, sp, -48
+; NOVX-ILP32-NEXT:    .cfi_def_cfa_offset 48
+; NOVX-ILP32-NEXT:    sw ra, 44(sp) # 4-byte Folded Spill
+; NOVX-ILP32-NEXT:    sw s0, 40(sp) # 4-byte Folded Spill
+; NOVX-ILP32-NEXT:    .cfi_offset ra, -4
+; NOVX-ILP32-NEXT:    .cfi_offset s0, -8
+; NOVX-ILP32-NEXT:    mv s0, a0
+; NOVX-ILP32-NEXT:    lw a2, 0(a0)
+; NOVX-ILP32-NEXT:    lw a3, 4(a0)
+; NOVX-ILP32-NEXT:    lw a4, 8(a0)
+; NOVX-ILP32-NEXT:    lw a5, 12(a0)
+; NOVX-ILP32-NEXT:    addi a0, sp, 16
+; NOVX-ILP32-NEXT:    mv a1, sp
+; NOVX-ILP32-NEXT:    sw a2, 0(sp)
+; NOVX-ILP32-NEXT:    sw a3, 4(sp)
+; NOVX-ILP32-NEXT:    sw a4, 8(sp)
+; NOVX-ILP32-NEXT:    sw a5, 12(sp)
+; NOVX-ILP32-NEXT:    call callee_v4i32
+; NOVX-ILP32-NEXT:    lw a0, 16(sp)
+; NOVX-ILP32-NEXT:    lw a1, 20(sp)
+; NOVX-ILP32-NEXT:    lw a2, 24(sp)
+; NOVX-ILP32-NEXT:    lw a3, 28(sp)
+; NOVX-ILP32-NEXT:    sw a0, 0(s0)
+; NOVX-ILP32-NEXT:    sw a1, 4(s0)
+; NOVX-ILP32-NEXT:    sw a2, 8(s0)
+; NOVX-ILP32-NEXT:    sw a3, 12(s0)
+; NOVX-ILP32-NEXT:    lw ra, 44(sp) # 4-byte Folded Reload
+; NOVX-ILP32-NEXT:    lw s0, 40(sp) # 4-byte Folded Reload
+; NOVX-ILP32-NEXT:    .cfi_restore ra
+; NOVX-ILP32-NEXT:    .cfi_restore s0
+; NOVX-ILP32-NEXT:    addi sp, sp, 48
+; NOVX-ILP32-NEXT:    .cfi_def_cfa_offset 0
+; NOVX-ILP32-NEXT:    ret
   %v = load <4 x i32>, ptr %p, align 16
   %r = call <4 x i32> @callee_v4i32(<4 x i32> %v)
   store <4 x i32> %r, ptr %p, align 16

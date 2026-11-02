@@ -55,6 +55,17 @@ static cl::opt<unsigned> RISCVMaxBuildIntsCost(
     cl::desc("The maximum cost used for building integers."), cl::init(0),
     cl::Hidden);
 
+static cl::opt<bool> VortexWideMerging(
+    "riscv-vortex-wide-lsv",
+    cl::desc("Merge XVortex float accesses into vx_flw.d/.q and vx_fsw.d/.q "
+             "in the LoadStoreVectorizer and the DAG store merging (explicit "
+             "vector accesses use them either way)"),
+    cl::init(true), cl::Hidden);
+
+bool RISCVSubtarget::useVortexWideMerging() const {
+  return hasVortexWideMem() && VortexWideMerging;
+}
+
 static cl::opt<bool> UseAA("riscv-use-aa", cl::init(true),
                            cl::desc("Enable the use of AA during codegen."));
 

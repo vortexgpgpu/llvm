@@ -188,6 +188,9 @@ public:
     return hasVendorXVortex() && !is64Bit() && hasStdExtF() &&
            !hasStdExtD() && !useRVVForFixedLengthVectors();
   }
+  // Whether the compiler may merge scalar float accesses into the wide ones
+  // (-riscv-vortex-wide-lsv).
+  bool useVortexWideMerging() const;
   MVT getXLenVT() const {
     return is64Bit() ? MVT::i64 : MVT::i32;
   }
