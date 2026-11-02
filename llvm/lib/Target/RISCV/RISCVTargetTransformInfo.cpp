@@ -31,6 +31,13 @@ static cl::opt<unsigned> RVVRegisterWidthLMUL(
         "by autovectorized code. Fractional LMULs are not supported."),
     cl::init(2), cl::Hidden);
 
+static cl::opt<bool> VortexWideLSV(
+    "riscv-vortex-wide-lsv",
+    cl::desc("Let the LoadStoreVectorizer merge XVortex float accesses into "
+             "vx_flw.d/.q and vx_fsw.d/.q (explicit vector accesses use them "
+             "either way)"),
+    cl::init(true), cl::Hidden);
+
 static cl::opt<unsigned> SLPMaxVF(
     "riscv-v-slp-max-vf",
     cl::desc(
@@ -2670,8 +2677,16 @@ bool llvm::isVortexLocalWindowPointer(const Value *Ptr) {
   return none_of(Objs, [](const Value *O) { return isa<GlobalValue>(O); });
 }
 
+// XVortex: v2f32/v4f32 accesses with 4-byte alignment are one vx_flw.d/.q or
+// vx_fsw.d/.q in any address space, so the LoadStoreVectorizer merges float
+// load and store chains of 2 or 4 words. Integer, volatile and atomic accesses
+// stay scalar (the vectorizer itself skips the last two).
+bool RISCVTTIImpl::useVortexWideLSV() const {
+  return ST->hasVortexWideMem() && VortexWideLSV;
+}
+
 unsigned RISCVTTIImpl::getLoadStoreVecRegBitWidth(unsigned AddrSpace) const {
-  if (ST->hasVortexWideMem() && AddrSpace == VortexAS::Local)
+  if (useVortexWideLSV())
     return 128;
   return BaseT::getLoadStoreVecRegBitWidth(AddrSpace);
 }
@@ -2679,16 +2694,19 @@ unsigned RISCVTTIImpl::getLoadStoreVecRegBitWidth(unsigned AddrSpace) const {
 bool RISCVTTIImpl::isLegalToVectorizeLoad(LoadInst *LI) const {
   if (!ST->hasVendorXVortex())
     return BaseT::isLegalToVectorizeLoad(LI);
-  return ST->hasVortexWideMem() &&
-         LI->getPointerAddressSpace() == VortexAS::Local &&
-         LI->getType()->getScalarType()->isFloatTy() &&
-         isVortexLocalWindowPointer(LI->getPointerOperand());
+  return useVortexWideLSV() && LI->getType()->getScalarType()->isFloatTy();
 }
 
 bool RISCVTTIImpl::isLegalToVectorizeStore(StoreInst *SI) const {
   if (!ST->hasVendorXVortex())
     return BaseT::isLegalToVectorizeStore(SI);
-  return false;
+  return useVortexWideLSV() &&
+         SI->getValueOperand()->getType()->getScalarType()->isFloatTy();
+}
+
+static bool isVortexWideChain(unsigned ChainSizeInBytes, Align Alignment) {
+  return (ChainSizeInBytes == 8 || ChainSizeInBytes == 16) &&
+         Alignment >= Align(4);
 }
 
 bool RISCVTTIImpl::isLegalToVectorizeLoadChain(unsigned ChainSizeInBytes,
@@ -2697,10 +2715,7 @@ bool RISCVTTIImpl::isLegalToVectorizeLoadChain(unsigned ChainSizeInBytes,
   if (!ST->hasVendorXVortex())
     return BaseT::isLegalToVectorizeLoadChain(ChainSizeInBytes, Alignment,
                                               AddrSpace);
-  // vx_flw.d/.q need the address aligned to the access size.
-  return ST->hasVortexWideMem() && AddrSpace == VortexAS::Local &&
-         (ChainSizeInBytes == 8 || ChainSizeInBytes == 16) &&
-         Alignment.value() >= ChainSizeInBytes;
+  return useVortexWideLSV() && isVortexWideChain(ChainSizeInBytes, Alignment);
 }
 
 bool RISCVTTIImpl::isLegalToVectorizeStoreChain(unsigned ChainSizeInBytes,
@@ -2709,7 +2724,23 @@ bool RISCVTTIImpl::isLegalToVectorizeStoreChain(unsigned ChainSizeInBytes,
   if (!ST->hasVendorXVortex())
     return BaseT::isLegalToVectorizeStoreChain(ChainSizeInBytes, Alignment,
                                                AddrSpace);
-  return false;
+  return useVortexWideLSV() && isVortexWideChain(ChainSizeInBytes, Alignment);
+}
+
+// The vectorizer asks whether a chain below its size alignment is fast; a
+// word-aligned wide access is the same words as the scalar ones.
+bool RISCVTTIImpl::allowsMisalignedMemoryAccesses(LLVMContext &Context,
+                                                  unsigned BitWidth,
+                                                  unsigned AddressSpace,
+                                                  Align Alignment,
+                                                  unsigned *Fast) const {
+  if (useVortexWideLSV() && isVortexWideChain(BitWidth / 8, Alignment)) {
+    if (Fast)
+      *Fast = 1;
+    return true;
+  }
+  return BaseT::allowsMisalignedMemoryAccesses(Context, BitWidth, AddressSpace,
+                                               Alignment, Fast);
 }
 
 bool RISCVTTIImpl::hasBranchDivergence(const Function *F) {

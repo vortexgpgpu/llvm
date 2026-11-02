@@ -111,9 +111,9 @@ public:
   }
   unsigned getAssumedAddrSpace(const Value *V) const;
 
-  // XVortex: the LoadStoreVectorizer forms the aligned 8- and 16-byte float
-  // chains from local memory that vx_flw.d/.q load. Every other access and
-  // every store stays scalar.
+  // XVortex: the LoadStoreVectorizer merges word-aligned float chains of 2 or
+  // 4 words, in any address space, into vx_flw.d/.q and vx_fsw.d/.q.
+  bool useVortexWideLSV() const;
   unsigned getLoadStoreVecRegBitWidth(unsigned AddrSpace) const;
   bool isLegalToVectorizeLoad(LoadInst *LI) const;
   bool isLegalToVectorizeStore(StoreInst *SI) const;
@@ -121,6 +121,9 @@ public:
                                    unsigned AddrSpace) const;
   bool isLegalToVectorizeStoreChain(unsigned ChainSizeInBytes, Align Alignment,
                                     unsigned AddrSpace) const;
+  bool allowsMisalignedMemoryAccesses(LLVMContext &Context, unsigned BitWidth,
+                                      unsigned AddressSpace, Align Alignment,
+                                      unsigned *Fast) const;
 
   bool shouldExpandReduction(const IntrinsicInst *II) const;
   bool supportsScalableVectors() const { return ST->hasVInstructions(); }

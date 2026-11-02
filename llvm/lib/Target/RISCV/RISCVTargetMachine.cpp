@@ -562,8 +562,9 @@ void RISCVPassConfig::addIRPasses() {
     // Recover global/local address spaces the middle end did not, so local
     // load chains can become vx_flw.d/.q.
     addPass(createInferAddressSpacesPass());
-    // Merge aligned local float loads into the v2f32/v4f32 loads that select
-    // vx_flw.d/.q; the TTI keeps every other access scalar.
+    // Merge word-aligned float loads and stores into the v2f32/v4f32
+    // accesses that select vx_flw.d/.q and vx_fsw.d/.q; the TTI keeps every
+    // other access scalar.
     addPass(createLoadStoreVectorizerPass());
   }
 

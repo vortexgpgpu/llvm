@@ -2,8 +2,8 @@
 ; RUN: llc -mtriple=riscv32 -mattr=+f,+v,+xvortex -verify-machineinstrs < %s \
 ; RUN:   | FileCheck %s --implicit-check-not=vx_
 
-; With V, v2f32/v4f32 are RVV values: local float chains stay RVV or scalar
-; code, and no XVortex group lowering applies to them.
+; With V, v2f32/v4f32 are RVV values: float chains stay RVV or scalar code,
+; and no XVortex group lowering or wide access applies to them.
 
 define float @local_float4(ptr addrspace(3) align 16 %p) {
 ; CHECK-LABEL: local_float4:
@@ -67,4 +67,34 @@ define i32 @local_v4i32_lane(ptr addrspace(3) %p) {
   %v = load <4 x i32>, ptr addrspace(3) %p, align 16
   %a = extractelement <4 x i32> %v, i32 2
   ret i32 %a
+}
+
+define void @global_store_float4(ptr addrspace(1) %p, float %a, float %b, float %c, float %d) {
+; CHECK-LABEL: global_store_float4:
+; CHECK:       # %bb.0:
+; CHECK-NEXT:    fsw fa0, 0(a0)
+; CHECK-NEXT:    fsw fa1, 4(a0)
+; CHECK-NEXT:    fsw fa2, 8(a0)
+; CHECK-NEXT:    fsw fa3, 12(a0)
+; CHECK-NEXT:    ret
+  %p1 = getelementptr inbounds float, ptr addrspace(1) %p, i32 1
+  %p2 = getelementptr inbounds float, ptr addrspace(1) %p, i32 2
+  %p3 = getelementptr inbounds float, ptr addrspace(1) %p, i32 3
+  store float %a, ptr addrspace(1) %p, align 4
+  store float %b, ptr addrspace(1) %p1, align 4
+  store float %c, ptr addrspace(1) %p2, align 4
+  store float %d, ptr addrspace(1) %p3, align 4
+  ret void
+}
+
+define void @generic_copy_v4f32(ptr %p, ptr %q) {
+; CHECK-LABEL: generic_copy_v4f32:
+; CHECK:       # %bb.0:
+; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, ma
+; CHECK-NEXT:    vle32.v v8, (a0)
+; CHECK-NEXT:    vse32.v v8, (a1)
+; CHECK-NEXT:    ret
+  %v = load <4 x float>, ptr %p, align 4
+  store <4 x float> %v, ptr %q, align 4
+  ret void
 }

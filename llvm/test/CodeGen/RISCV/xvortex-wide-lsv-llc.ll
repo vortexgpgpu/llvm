@@ -4,12 +4,12 @@
 ; RUN: llc -mtriple=riscv32 -mattr=+f -verify-machineinstrs < %s \
 ; RUN:   | FileCheck %s --check-prefix=NOVX
 
-; Local (addrspace 3) float loads that the LoadStoreVectorizer merges into an
-; aligned 16- or 8-byte chain select vx_flw.q / vx_flw.d on RV32 with
-; FLEN 32. The vectorizer leaves other address spaces, stores, integer loads
-; and chains without proven alignment scalar; explicit v2f32/v4f32 accesses
-; are wide in any address space (xvortex-wide-explicit.ll), and targets
-; without the instructions stay scalar (xvortex-wide-unsupported.ll).
+; Float loads and stores that the LoadStoreVectorizer (run in the codegen IR
+; passes) merges into 2- or 4-word chains select vx_flw.d/.q and vx_fsw.d/.q
+; on RV32 with FLEN 32, in any address space and with 4-byte alignment.
+; Integer accesses stay scalar; explicit vector accesses are covered by
+; xvortex-wide-explicit.ll and targets without the instructions by
+; xvortex-wide-unsupported.ll.
 
 @lds = internal addrspace(3) global [64 x float] poison, align 16
 
@@ -99,15 +99,14 @@ define float @local_float2(ptr addrspace(3) align 8 %p) {
   ret float %r
 }
 
-; Only 8-byte alignment is proven: two vx_flw.d.
+; 8-byte alignment is enough for a quad: word alignment is all it needs.
 define float @local_float4_align8(ptr addrspace(3) align 8 %p) {
 ; VX-LABEL: local_float4_align8:
 ; VX:       # %bb.0:
-; VX-NEXT:    vx_flw.d fa0, 0(a0)
-; VX-NEXT:    vx_flw.d fa2, 8(a0)
-; VX-NEXT:    fadd.s fa5, fa0, fa1
-; VX-NEXT:    fmul.s fa4, fa2, fa3
-; VX-NEXT:    fsub.s fa0, fa5, fa4
+; VX-NEXT:    vx_flw.q fa2, 0(a0)
+; VX-NEXT:    fadd.s fa3, fa2, fa3
+; VX-NEXT:    fmul.s fa5, fa4, fa5
+; VX-NEXT:    fsub.s fa0, fa3, fa5
 ; VX-NEXT:    ret
 ;
 ; NOVX-LABEL: local_float4_align8:
@@ -133,17 +132,14 @@ define float @local_float4_align8(ptr addrspace(3) align 8 %p) {
   ret float %r
 }
 
-; No alignment beyond the element's is proven: four flw.
+; Word alignment only: still one quad.
 define float @local_float4_unaligned(ptr addrspace(3) %p) {
 ; VX-LABEL: local_float4_unaligned:
 ; VX:       # %bb.0:
-; VX-NEXT:    flw fa5, 0(a0)
-; VX-NEXT:    flw fa4, 4(a0)
-; VX-NEXT:    flw fa3, 8(a0)
-; VX-NEXT:    flw fa2, 12(a0)
-; VX-NEXT:    fadd.s fa5, fa5, fa4
-; VX-NEXT:    fmul.s fa4, fa3, fa2
-; VX-NEXT:    fsub.s fa0, fa5, fa4
+; VX-NEXT:    vx_flw.q fa2, 0(a0)
+; VX-NEXT:    fadd.s fa3, fa2, fa3
+; VX-NEXT:    fmul.s fa5, fa4, fa5
+; VX-NEXT:    fsub.s fa0, fa3, fa5
 ; VX-NEXT:    ret
 ;
 ; NOVX-LABEL: local_float4_unaligned:
@@ -172,13 +168,10 @@ define float @local_float4_unaligned(ptr addrspace(3) %p) {
 define float @global_float4(ptr addrspace(1) align 16 %p) {
 ; VX-LABEL: global_float4:
 ; VX:       # %bb.0:
-; VX-NEXT:    flw fa5, 0(a0)
-; VX-NEXT:    flw fa4, 4(a0)
-; VX-NEXT:    flw fa3, 8(a0)
-; VX-NEXT:    flw fa2, 12(a0)
-; VX-NEXT:    fadd.s fa5, fa5, fa4
-; VX-NEXT:    fmul.s fa4, fa3, fa2
-; VX-NEXT:    fsub.s fa0, fa5, fa4
+; VX-NEXT:    vx_flw.q fa2, 0(a0)
+; VX-NEXT:    fadd.s fa3, fa2, fa3
+; VX-NEXT:    fmul.s fa5, fa4, fa5
+; VX-NEXT:    fsub.s fa0, fa3, fa5
 ; VX-NEXT:    ret
 ;
 ; NOVX-LABEL: global_float4:
@@ -207,13 +200,10 @@ define float @global_float4(ptr addrspace(1) align 16 %p) {
 define float @generic_float4(ptr align 16 %p) {
 ; VX-LABEL: generic_float4:
 ; VX:       # %bb.0:
-; VX-NEXT:    flw fa5, 0(a0)
-; VX-NEXT:    flw fa4, 4(a0)
-; VX-NEXT:    flw fa3, 8(a0)
-; VX-NEXT:    flw fa2, 12(a0)
-; VX-NEXT:    fadd.s fa5, fa5, fa4
-; VX-NEXT:    fmul.s fa4, fa3, fa2
-; VX-NEXT:    fsub.s fa0, fa5, fa4
+; VX-NEXT:    vx_flw.q fa2, 0(a0)
+; VX-NEXT:    fadd.s fa3, fa2, fa3
+; VX-NEXT:    fmul.s fa5, fa4, fa5
+; VX-NEXT:    fsub.s fa0, fa3, fa5
 ; VX-NEXT:    ret
 ;
 ; NOVX-LABEL: generic_float4:
@@ -242,10 +232,11 @@ define float @generic_float4(ptr align 16 %p) {
 define void @local_store_float4(ptr addrspace(3) align 16 %p, float %a, float %b, float %c, float %d) {
 ; VX-LABEL: local_store_float4:
 ; VX:       # %bb.0:
-; VX-NEXT:    fsw fa0, 0(a0)
-; VX-NEXT:    fsw fa1, 4(a0)
-; VX-NEXT:    fsw fa2, 8(a0)
-; VX-NEXT:    fsw fa3, 12(a0)
+; VX-NEXT:    fmv.s fa5, fa3
+; VX-NEXT:    fmv.s fa4, fa2
+; VX-NEXT:    fmv.s fa3, fa1
+; VX-NEXT:    fmv.s fa2, fa0
+; VX-NEXT:    vx_fsw.q fa2, 0(a0)
 ; VX-NEXT:    ret
 ;
 ; NOVX-LABEL: local_store_float4:
@@ -404,9 +395,8 @@ define float @local_v2f32(ptr addrspace(3) %p) {
   ret float %r
 }
 
-; The __local_mem() pattern: a local window address cast to a generic
-; pointer. InferAddressSpaces in the codegen IR pipeline recovers
-; addrspace(3) before the vectorizer runs.
+; The __local_mem() pattern: a local window address used as a generic
+; pointer.
 define float @local_mem_generic(i32 %lmem, i32 %row) {
 ; VX-LABEL: local_mem_generic:
 ; VX:       # %bb.0:
@@ -841,19 +831,17 @@ exit:
   ret float %s
 }
 
-; An addrspace(3) global sits in .bss, not behind a local window address, so
-; the wide loads cannot reach it.
+; An addrspace(3) global: the accesses are generic, so it merges like any
+; other address.
 define float @local_global_float4() {
 ; VX-LABEL: local_global_float4:
 ; VX:       # %bb.0:
 ; VX-NEXT:    lui a0, %hi(lds)
-; VX-NEXT:    flw fa5, %lo(lds)(a0)
-; VX-NEXT:    flw fa4, %lo(lds+4)(a0)
-; VX-NEXT:    flw fa3, %lo(lds+8)(a0)
-; VX-NEXT:    flw fa2, %lo(lds+12)(a0)
-; VX-NEXT:    fadd.s fa5, fa5, fa4
-; VX-NEXT:    fmul.s fa4, fa3, fa2
-; VX-NEXT:    fsub.s fa0, fa5, fa4
+; VX-NEXT:    addi a0, a0, %lo(lds)
+; VX-NEXT:    vx_flw.q fa2, 0(a0)
+; VX-NEXT:    fadd.s fa3, fa2, fa3
+; VX-NEXT:    fmul.s fa5, fa4, fa5
+; VX-NEXT:    fsub.s fa0, fa3, fa5
 ; VX-NEXT:    ret
 ;
 ; NOVX-LABEL: local_global_float4:
@@ -917,4 +905,101 @@ define float @local_global_v4f32(i32 %i) {
   %cd = fmul float %c, %d
   %r = fsub float %ab, %cd
   ret float %r
+}
+
+; A chain at a word offset that is not a multiple of 16: the remainder goes
+; into the base register, shared by both chains.
+define float @global_float8_offset(ptr addrspace(1) %base) {
+; VX-LABEL: global_float8_offset:
+; VX:       # %bb.0:
+; VX-NEXT:    addi a0, a0, 4
+; VX-NEXT:    vx_flw.q fa2, 16(a0)
+; VX-NEXT:    vx_flw.q ft8, 32(a0)
+; VX-NEXT:    fadd.s fa3, fa2, fa3
+; VX-NEXT:    fadd.s fa5, fa4, fa5
+; VX-NEXT:    fadd.s fa4, ft8, ft9
+; VX-NEXT:    fadd.s fa2, ft10, ft11
+; VX-NEXT:    fadd.s fa5, fa3, fa5
+; VX-NEXT:    fadd.s fa4, fa4, fa2
+; VX-NEXT:    fadd.s fa0, fa5, fa4
+; VX-NEXT:    ret
+;
+; NOVX-LABEL: global_float8_offset:
+; NOVX:       # %bb.0:
+; NOVX-NEXT:    flw fa5, 20(a0)
+; NOVX-NEXT:    flw fa4, 24(a0)
+; NOVX-NEXT:    flw fa3, 28(a0)
+; NOVX-NEXT:    flw fa2, 32(a0)
+; NOVX-NEXT:    flw fa1, 36(a0)
+; NOVX-NEXT:    flw fa0, 40(a0)
+; NOVX-NEXT:    flw ft0, 44(a0)
+; NOVX-NEXT:    flw ft1, 48(a0)
+; NOVX-NEXT:    fadd.s fa5, fa5, fa4
+; NOVX-NEXT:    fadd.s fa4, fa3, fa2
+; NOVX-NEXT:    fadd.s fa3, fa1, fa0
+; NOVX-NEXT:    fadd.s fa2, ft0, ft1
+; NOVX-NEXT:    fadd.s fa5, fa5, fa4
+; NOVX-NEXT:    fadd.s fa4, fa3, fa2
+; NOVX-NEXT:    fadd.s fa0, fa5, fa4
+; NOVX-NEXT:    ret
+  %p = getelementptr inbounds float, ptr addrspace(1) %base, i32 5
+  %p1 = getelementptr inbounds float, ptr addrspace(1) %base, i32 6
+  %p2 = getelementptr inbounds float, ptr addrspace(1) %base, i32 7
+  %p3 = getelementptr inbounds float, ptr addrspace(1) %base, i32 8
+  %p4 = getelementptr inbounds float, ptr addrspace(1) %base, i32 9
+  %p5 = getelementptr inbounds float, ptr addrspace(1) %base, i32 10
+  %p6 = getelementptr inbounds float, ptr addrspace(1) %base, i32 11
+  %p7 = getelementptr inbounds float, ptr addrspace(1) %base, i32 12
+  %a = load float, ptr addrspace(1) %p, align 4
+  %b = load float, ptr addrspace(1) %p1, align 4
+  %c = load float, ptr addrspace(1) %p2, align 4
+  %d = load float, ptr addrspace(1) %p3, align 4
+  %e = load float, ptr addrspace(1) %p4, align 4
+  %f = load float, ptr addrspace(1) %p5, align 4
+  %g = load float, ptr addrspace(1) %p6, align 4
+  %h = load float, ptr addrspace(1) %p7, align 4
+  %ab = fadd float %a, %b
+  %cd = fadd float %c, %d
+  %ef = fadd float %e, %f
+  %gh = fadd float %g, %h
+  %abcd = fadd float %ab, %cd
+  %efgh = fadd float %ef, %gh
+  %r = fadd float %abcd, %efgh
+  ret float %r
+}
+
+; A copy between global and local memory: one load and one store per quad.
+define void @copy_global_to_local(ptr addrspace(1) %src, ptr addrspace(3) %dst) {
+; VX-LABEL: copy_global_to_local:
+; VX:       # %bb.0:
+; VX-NEXT:    vx_flw.q fa2, 0(a0)
+; VX-NEXT:    vx_fsw.q fa2, 0(a1)
+; VX-NEXT:    ret
+;
+; NOVX-LABEL: copy_global_to_local:
+; NOVX:       # %bb.0:
+; NOVX-NEXT:    flw fa5, 0(a0)
+; NOVX-NEXT:    flw fa4, 4(a0)
+; NOVX-NEXT:    flw fa3, 8(a0)
+; NOVX-NEXT:    flw fa2, 12(a0)
+; NOVX-NEXT:    fsw fa5, 0(a1)
+; NOVX-NEXT:    fsw fa4, 4(a1)
+; NOVX-NEXT:    fsw fa3, 8(a1)
+; NOVX-NEXT:    fsw fa2, 12(a1)
+; NOVX-NEXT:    ret
+  %s1 = getelementptr inbounds float, ptr addrspace(1) %src, i32 1
+  %s2 = getelementptr inbounds float, ptr addrspace(1) %src, i32 2
+  %s3 = getelementptr inbounds float, ptr addrspace(1) %src, i32 3
+  %d1 = getelementptr inbounds float, ptr addrspace(3) %dst, i32 1
+  %d2 = getelementptr inbounds float, ptr addrspace(3) %dst, i32 2
+  %d3 = getelementptr inbounds float, ptr addrspace(3) %dst, i32 3
+  %a = load float, ptr addrspace(1) %src, align 4
+  %b = load float, ptr addrspace(1) %s1, align 4
+  %c = load float, ptr addrspace(1) %s2, align 4
+  %d = load float, ptr addrspace(1) %s3, align 4
+  store float %a, ptr addrspace(3) %dst, align 4
+  store float %b, ptr addrspace(3) %d1, align 4
+  store float %c, ptr addrspace(3) %d2, align 4
+  store float %d, ptr addrspace(3) %d3, align 4
+  ret void
 }
