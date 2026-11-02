@@ -366,10 +366,10 @@ define void @call_v4f32(ptr %p, ptr %q) {
 define void @call_v4i32(ptr %p) {
 ; ILP32F-LABEL: call_v4i32:
 ; ILP32F:       # %bb.0:
-; ILP32F-NEXT:    addi sp, sp, -64
-; ILP32F-NEXT:    .cfi_def_cfa_offset 64
-; ILP32F-NEXT:    sw ra, 60(sp) # 4-byte Folded Spill
-; ILP32F-NEXT:    sw s0, 56(sp) # 4-byte Folded Spill
+; ILP32F-NEXT:    addi sp, sp, -48
+; ILP32F-NEXT:    .cfi_def_cfa_offset 48
+; ILP32F-NEXT:    sw ra, 44(sp) # 4-byte Folded Spill
+; ILP32F-NEXT:    sw s0, 40(sp) # 4-byte Folded Spill
 ; ILP32F-NEXT:    .cfi_offset ra, -4
 ; ILP32F-NEXT:    .cfi_offset s0, -8
 ; ILP32F-NEXT:    mv s0, a0
@@ -377,35 +377,35 @@ define void @call_v4i32(ptr %p) {
 ; ILP32F-NEXT:    lw a3, 4(a0)
 ; ILP32F-NEXT:    lw a4, 8(a0)
 ; ILP32F-NEXT:    lw a5, 12(a0)
-; ILP32F-NEXT:    addi a0, sp, 32
-; ILP32F-NEXT:    addi a1, sp, 16
-; ILP32F-NEXT:    sw a2, 16(sp)
-; ILP32F-NEXT:    sw a3, 20(sp)
-; ILP32F-NEXT:    sw a4, 24(sp)
-; ILP32F-NEXT:    sw a5, 28(sp)
+; ILP32F-NEXT:    addi a0, sp, 16
+; ILP32F-NEXT:    mv a1, sp
+; ILP32F-NEXT:    sw a2, 0(sp)
+; ILP32F-NEXT:    sw a3, 4(sp)
+; ILP32F-NEXT:    sw a4, 8(sp)
+; ILP32F-NEXT:    sw a5, 12(sp)
 ; ILP32F-NEXT:    call callee_v4i32
-; ILP32F-NEXT:    lw a2, 32(sp)
-; ILP32F-NEXT:    lw a3, 36(sp)
-; ILP32F-NEXT:    lw a4, 40(sp)
-; ILP32F-NEXT:    lw a5, 44(sp)
+; ILP32F-NEXT:    lw a2, 16(sp)
+; ILP32F-NEXT:    lw a3, 20(sp)
+; ILP32F-NEXT:    lw a4, 24(sp)
+; ILP32F-NEXT:    lw a5, 28(sp)
 ; ILP32F-NEXT:    sw a2, 0(s0)
 ; ILP32F-NEXT:    sw a3, 4(s0)
 ; ILP32F-NEXT:    sw a4, 8(s0)
 ; ILP32F-NEXT:    sw a5, 12(s0)
-; ILP32F-NEXT:    lw ra, 60(sp) # 4-byte Folded Reload
-; ILP32F-NEXT:    lw s0, 56(sp) # 4-byte Folded Reload
+; ILP32F-NEXT:    lw ra, 44(sp) # 4-byte Folded Reload
+; ILP32F-NEXT:    lw s0, 40(sp) # 4-byte Folded Reload
 ; ILP32F-NEXT:    .cfi_restore ra
 ; ILP32F-NEXT:    .cfi_restore s0
-; ILP32F-NEXT:    addi sp, sp, 64
+; ILP32F-NEXT:    addi sp, sp, 48
 ; ILP32F-NEXT:    .cfi_def_cfa_offset 0
 ; ILP32F-NEXT:    ret
 ;
 ; ILP32-LABEL: call_v4i32:
 ; ILP32:       # %bb.0:
-; ILP32-NEXT:    addi sp, sp, -64
-; ILP32-NEXT:    .cfi_def_cfa_offset 64
-; ILP32-NEXT:    sw ra, 60(sp) # 4-byte Folded Spill
-; ILP32-NEXT:    sw s0, 56(sp) # 4-byte Folded Spill
+; ILP32-NEXT:    addi sp, sp, -48
+; ILP32-NEXT:    .cfi_def_cfa_offset 48
+; ILP32-NEXT:    sw ra, 44(sp) # 4-byte Folded Spill
+; ILP32-NEXT:    sw s0, 40(sp) # 4-byte Folded Spill
 ; ILP32-NEXT:    .cfi_offset ra, -4
 ; ILP32-NEXT:    .cfi_offset s0, -8
 ; ILP32-NEXT:    mv s0, a0
@@ -413,26 +413,26 @@ define void @call_v4i32(ptr %p) {
 ; ILP32-NEXT:    lw a3, 4(a0)
 ; ILP32-NEXT:    lw a4, 8(a0)
 ; ILP32-NEXT:    lw a5, 12(a0)
-; ILP32-NEXT:    addi a0, sp, 32
-; ILP32-NEXT:    addi a1, sp, 16
-; ILP32-NEXT:    sw a2, 16(sp)
-; ILP32-NEXT:    sw a3, 20(sp)
-; ILP32-NEXT:    sw a4, 24(sp)
-; ILP32-NEXT:    sw a5, 28(sp)
+; ILP32-NEXT:    addi a0, sp, 16
+; ILP32-NEXT:    mv a1, sp
+; ILP32-NEXT:    sw a2, 0(sp)
+; ILP32-NEXT:    sw a3, 4(sp)
+; ILP32-NEXT:    sw a4, 8(sp)
+; ILP32-NEXT:    sw a5, 12(sp)
 ; ILP32-NEXT:    call callee_v4i32
-; ILP32-NEXT:    lw a2, 32(sp)
-; ILP32-NEXT:    lw a3, 36(sp)
-; ILP32-NEXT:    lw a4, 40(sp)
-; ILP32-NEXT:    lw a5, 44(sp)
+; ILP32-NEXT:    lw a2, 16(sp)
+; ILP32-NEXT:    lw a3, 20(sp)
+; ILP32-NEXT:    lw a4, 24(sp)
+; ILP32-NEXT:    lw a5, 28(sp)
 ; ILP32-NEXT:    sw a2, 0(s0)
 ; ILP32-NEXT:    sw a3, 4(s0)
 ; ILP32-NEXT:    sw a4, 8(s0)
 ; ILP32-NEXT:    sw a5, 12(s0)
-; ILP32-NEXT:    lw ra, 60(sp) # 4-byte Folded Reload
-; ILP32-NEXT:    lw s0, 56(sp) # 4-byte Folded Reload
+; ILP32-NEXT:    lw ra, 44(sp) # 4-byte Folded Reload
+; ILP32-NEXT:    lw s0, 40(sp) # 4-byte Folded Reload
 ; ILP32-NEXT:    .cfi_restore ra
 ; ILP32-NEXT:    .cfi_restore s0
-; ILP32-NEXT:    addi sp, sp, 64
+; ILP32-NEXT:    addi sp, sp, 48
 ; ILP32-NEXT:    .cfi_def_cfa_offset 0
 ; ILP32-NEXT:    ret
 ;

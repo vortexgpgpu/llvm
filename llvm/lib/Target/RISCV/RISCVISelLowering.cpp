@@ -197,21 +197,26 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
         }
       }
     };
+    // A constant lane of a group is one of its sub-registers; any other lane
+    // goes through the stack.
     if (Subtarget.is64Bit()) {
       SetupXVortexVT(MVT::v2i64, &RISCV::GPRG2RegClass);
       SetupXVortexVT(MVT::v4i64, &RISCV::GPRG4RegClass);
       SetupXVortexVT(MVT::v8i64, &RISCV::GPRG8RegClass);
+      setOperationAction({ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT},
+                         {MVT::v2i64, MVT::v4i64, MVT::v8i64}, Custom);
     } else {
       SetupXVortexVT(MVT::v2i32, &RISCV::GPRG2RegClass);
       SetupXVortexVT(MVT::v4i32, &RISCV::GPRG4RegClass);
       SetupXVortexVT(MVT::v8i32, &RISCV::GPRG8RegClass);
+      setOperationAction({ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT},
+                         {MVT::v2i32, MVT::v4i32, MVT::v8i32}, Custom);
     }
     if (Subtarget.hasStdExtF()) {
       SetupXVortexVT(MVT::v2f32, &RISCV::FPRG2RegClass);
       SetupXVortexVT(MVT::v4f32, &RISCV::FPRG4RegClass);
       SetupXVortexVT(MVT::v8f32, &RISCV::FPRG8RegClass);
-      // A constant lane of an FP group is one of its sub-registers, and a
-      // vector built from scalars is a REG_SEQUENCE of them.
+      // A vector built from scalars is a REG_SEQUENCE of them.
       setOperationAction({ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT,
                           ISD::BUILD_VECTOR},
                          {MVT::v2f32, MVT::v4f32, MVT::v8f32}, Custom);
