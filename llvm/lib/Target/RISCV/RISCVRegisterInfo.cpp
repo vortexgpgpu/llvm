@@ -677,6 +677,12 @@ bool RISCVRegisterInfo::needsFrameBaseReg(MachineInstr *MI,
   if (!MI->mayLoad() && !MI->mayStore())
     return false;
 
+  // Only the range is tested against these estimated SP/FP offsets. The
+  // XVortex wide multiple rule is left to isFrameOffsetLegal on the exact
+  // offsets from a shared base: eliminateFrameIndex already moves an SP/FP
+  // offset that breaks it into an ADDI.
+  int64_t InstrOffset = getFrameIndexInstrOffset(MI, FIOperandNum);
+
   const MachineFunction &MF = *MI->getMF();
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   const RISCVFrameLowering *TFI = getFrameLowering(MF);
@@ -702,7 +708,7 @@ bool RISCVRegisterInfo::needsFrameBaseReg(MachineInstr *MI,
     }
 
     int64_t MaxFPOffset = Offset - CalleeSavedSize;
-    return !isFrameOffsetLegal(MI, RISCV::X8, MaxFPOffset);
+    return !isInt<12>(MaxFPOffset + InstrOffset);
   }
 
   // Assume 128 bytes spill slots size to estimate the maximum possible
@@ -711,7 +717,7 @@ bool RISCVRegisterInfo::needsFrameBaseReg(MachineInstr *MI,
   // real one for RISC-V.
   int64_t MaxSPOffset = Offset + 128;
   MaxSPOffset += MFI.getLocalFrameSize();
-  return !isFrameOffsetLegal(MI, RISCV::X2, MaxSPOffset);
+  return !isInt<12>(MaxSPOffset + InstrOffset);
 }
 
 // Determine whether a given base register plus offset immediate is
@@ -766,6 +772,8 @@ void RISCVRegisterInfo::resolveFrameIndex(MachineInstr &MI, Register BaseReg,
            "Instr does not have a FrameIndex operand!");
   }
 
+  assert(isFrameOffsetLegal(&MI, BaseReg, Offset) &&
+         "Frame base offset not encodable");
   Offset += getFrameIndexInstrOffset(&MI, FIOperandNum);
   // FrameIndex Operands are always represented as a
   // register followed by an immediate.

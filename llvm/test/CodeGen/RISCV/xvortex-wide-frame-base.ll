@@ -7,6 +7,11 @@
 ; objects beyond the immediate range. A wide access may use the shared base
 ; only when its offset from it is a multiple of 8 (.d) or 16 (.q): %a sits
 ; 36 bytes above %c, so it needs a base of its own.
+;
+; Whether a reference needs a base at all is decided on an estimate of its
+; SP/FP offset, which tests the range only: a small frame addresses its wide
+; accesses from SP, and eliminateFrameIndex handles an SP/FP offset that is
+; not a multiple.
 
 declare void @use(ptr, ptr, ptr, ptr)
 
@@ -71,5 +76,54 @@ define void @far_objects(<4 x float> %v, <4 x float> %w, <2 x float> %x) {
   %b4 = getelementptr inbounds i8, ptr %b, i32 4
   store <2 x float> %x, ptr %b4, align 4
   call void @use(ptr %big, ptr %a, ptr %b, ptr %c)
+  ret void
+}
+
+declare void @ext(ptr, ptr, ptr)
+
+define void @small_frame(<4 x float> %v, <4 x float> %w) {
+; CHECK-LABEL: small_frame:
+; CHECK:       # %bb.0:
+; CHECK-NEXT:    addi sp, sp, -64
+; CHECK-NEXT:    .cfi_def_cfa_offset 64
+; CHECK-NEXT:    sw ra, 60(sp) # 4-byte Folded Spill
+; CHECK-NEXT:    .cfi_offset ra, -4
+; CHECK-NEXT:    fmv.s ft11, fa7
+; CHECK-NEXT:    fmv.s ft3, fa3
+; CHECK-NEXT:    fmv.s ft10, fa6
+; CHECK-NEXT:    fmv.s ft2, fa2
+; CHECK-NEXT:    fmv.s ft9, fa5
+; CHECK-NEXT:    fmv.s ft1, fa1
+; CHECK-NEXT:    fmv.s ft8, fa4
+; CHECK-NEXT:    fmv.s ft0, fa0
+; CHECK-NEXT:    vx_fsw.q ft0, 32(sp)
+; CHECK-NEXT:    vx_fsw.q ft8, 16(sp)
+; CHECK-NEXT:    addi a0, sp, 32
+; CHECK-NEXT:    addi a1, sp, 16
+; CHECK-NEXT:    addi a2, sp, 4
+; CHECK-NEXT:    call ext
+; CHECK-NEXT:    vx_flw.q fa2, 32(sp)
+; CHECK-NEXT:    vx_flw.q ft8, 16(sp)
+; CHECK-NEXT:    fadd.s fa5, fa5, ft11
+; CHECK-NEXT:    fadd.s fa4, fa4, ft10
+; CHECK-NEXT:    fadd.s fa3, fa3, ft9
+; CHECK-NEXT:    fadd.s fa2, fa2, ft8
+; CHECK-NEXT:    addi a0, sp, 4
+; CHECK-NEXT:    vx_fsw.q fa2, 0(a0)
+; CHECK-NEXT:    lw ra, 60(sp) # 4-byte Folded Reload
+; CHECK-NEXT:    .cfi_restore ra
+; CHECK-NEXT:    addi sp, sp, 64
+; CHECK-NEXT:    .cfi_def_cfa_offset 0
+; CHECK-NEXT:    ret
+  %a = alloca [4 x float], align 16
+  %b = alloca [4 x float], align 16
+  %c = alloca [3 x float], align 4
+  store <4 x float> %v, ptr %a, align 4
+  store <4 x float> %w, ptr %b, align 4
+  call void @ext(ptr %a, ptr %b, ptr %c)
+  %x = load <4 x float>, ptr %a, align 4
+  %y = load <4 x float>, ptr %b, align 4
+  %s = fadd <4 x float> %x, %y
+  store <4 x float> %s, ptr %c, align 4
   ret void
 }
