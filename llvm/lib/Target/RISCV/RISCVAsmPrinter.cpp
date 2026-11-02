@@ -18,6 +18,7 @@
 #include "MCTargetDesc/RISCVTargetStreamer.h"
 #include "RISCV.h"
 #include "RISCVConstantPoolValue.h"
+#include "RISCVInstrInfo.h"
 #include "RISCVMachineFunctionInfo.h"
 #include "RISCVRegisterInfo.h"
 #include "TargetInfo/RISCVTargetInfo.h"
@@ -300,6 +301,14 @@ void RISCVAsmPrinter::emitNTLHint(const MachineInstr *MI) {
 void RISCVAsmPrinter::emitInstruction(const MachineInstr *MI) {
   RISCV_MC::verifyInstructionPredicates(MI->getOpcode(),
                                         getSubtargetInfo().getFeatureBits());
+
+  // The hardware expands an XVortex wide access by replacing the low offset
+  // bits, so any other offset would reach the wrong words.
+  if (unsigned OffsetAlign = RISCV::getVXWideOffsetAlign(MI->getOpcode());
+      OffsetAlign && (!MI->getOperand(2).isImm() ||
+                      MI->getOperand(2).getImm() % OffsetAlign))
+    report_fatal_error("XVortex wide access offset is not a multiple of " +
+                       Twine(OffsetAlign));
 
   emitNTLHint(MI);
 

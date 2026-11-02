@@ -727,6 +727,10 @@ bool RISCVRegisterInfo::isFrameOffsetLegal(const MachineInstr *MI,
   }
 
   Offset += getFrameIndexInstrOffset(MI, FIOperandNum);
+  // XVortex wide accesses take only a multiple of their size.
+  if (unsigned OffsetAlign = RISCV::getVXWideOffsetAlign(MI->getOpcode());
+      OffsetAlign && Offset % OffsetAlign)
+    return false;
   return isInt<12>(Offset);
 }
 
