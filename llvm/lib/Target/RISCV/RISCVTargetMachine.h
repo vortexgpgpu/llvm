@@ -60,6 +60,10 @@ public:
                                 SMRange &SourceRange) const override;
 
   void registerPassBuilderCallbacks(PassBuilder &PB) override;
+  void registerDefaultAliasAnalyses(AAManager &AAM) override;
+
+  // True when the target's default features include XVortex (the Vortex GPU).
+  bool hasVendorXVortex() const;
 };
 
 std::unique_ptr<ScheduleDAGMutation>

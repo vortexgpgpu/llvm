@@ -80,6 +80,35 @@ bool RISCVVortexKEntry::runOnModule(Module &M) {
   return Changed;
 }
 
+bool llvm::isVortexKernelEntry(const Function &F) {
+  if (F.hasFnAttribute("vortex-kernel"))
+    return true;
+  const Module *M = F.getParent();
+  if (!M)
+    return false;
+  const GlobalVariable *GA = M->getGlobalVariable("llvm.global.annotations");
+  if (!GA || !GA->hasInitializer())
+    return false;
+  const auto *CA = dyn_cast<ConstantArray>(GA->getInitializer());
+  if (!CA)
+    return false;
+  for (const Value *Op : CA->operands()) {
+    const auto *CS = dyn_cast<ConstantStruct>(Op);
+    if (!CS || CS->getNumOperands() < 2)
+      continue;
+    if (CS->getOperand(0)->stripPointerCasts() != &F)
+      continue;
+    const auto *StrGV =
+        dyn_cast<GlobalVariable>(CS->getOperand(1)->stripPointerCasts());
+    if (!StrGV || !StrGV->hasInitializer())
+      continue;
+    const auto *Str = dyn_cast<ConstantDataArray>(StrGV->getInitializer());
+    if (Str && Str->isCString() && Str->getAsCString() == "vortex.kernel")
+      return true;
+  }
+  return false;
+}
+
 INITIALIZE_PASS(RISCVVortexKEntry, DEBUG_TYPE, PASS_NAME, false, false)
 
 char RISCVVortexKEntry::ID = 0;

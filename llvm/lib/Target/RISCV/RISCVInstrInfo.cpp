@@ -627,6 +627,73 @@ void RISCVInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   llvm_unreachable("Impossible reg-to-reg copy");
 }
 
+std::optional<RISCV::VXGroupSpillInfo>
+RISCV::getVXGroupSpillInfo(unsigned Opcode, bool IsRV64) {
+  static const unsigned GPRG4Subs[] = {
+      RISCV::sub_gpr_g4_0, RISCV::sub_gpr_g4_1, RISCV::sub_gpr_g4_2,
+      RISCV::sub_gpr_g4_3};
+  static const unsigned GPRG8Subs[] = {
+      RISCV::sub_gpr_g8_0, RISCV::sub_gpr_g8_1, RISCV::sub_gpr_g8_2,
+      RISCV::sub_gpr_g8_3, RISCV::sub_gpr_g8_4, RISCV::sub_gpr_g8_5,
+      RISCV::sub_gpr_g8_6, RISCV::sub_gpr_g8_7};
+  static const unsigned FPRG2Subs[] = {RISCV::sub_fpr32_g2_0,
+                                       RISCV::sub_fpr32_g2_1};
+  static const unsigned FPRG4Subs[] = {
+      RISCV::sub_fpr32_g4_0, RISCV::sub_fpr32_g4_1, RISCV::sub_fpr32_g4_2,
+      RISCV::sub_fpr32_g4_3};
+  static const unsigned FPRG8Subs[] = {
+      RISCV::sub_fpr32_g8_0, RISCV::sub_fpr32_g8_1, RISCV::sub_fpr32_g8_2,
+      RISCV::sub_fpr32_g8_3, RISCV::sub_fpr32_g8_4, RISCV::sub_fpr32_g8_5,
+      RISCV::sub_fpr32_g8_6, RISCV::sub_fpr32_g8_7};
+
+  ArrayRef<unsigned> Subs;
+  bool IsLoad, IsFP;
+  switch (Opcode) {
+  case RISCV::PseudoVX_GPRG4_SPILL:
+  case RISCV::PseudoVX_GPRG4_RELOAD:
+    Subs = GPRG4Subs;
+    IsFP = false;
+    IsLoad = Opcode == RISCV::PseudoVX_GPRG4_RELOAD;
+    break;
+  case RISCV::PseudoVX_GPRG8_SPILL:
+  case RISCV::PseudoVX_GPRG8_RELOAD:
+    Subs = GPRG8Subs;
+    IsFP = false;
+    IsLoad = Opcode == RISCV::PseudoVX_GPRG8_RELOAD;
+    break;
+  case RISCV::PseudoVX_FPRG2_SPILL:
+  case RISCV::PseudoVX_FPRG2_RELOAD:
+    Subs = FPRG2Subs;
+    IsFP = true;
+    IsLoad = Opcode == RISCV::PseudoVX_FPRG2_RELOAD;
+    break;
+  case RISCV::PseudoVX_FPRG4_SPILL:
+  case RISCV::PseudoVX_FPRG4_RELOAD:
+    Subs = FPRG4Subs;
+    IsFP = true;
+    IsLoad = Opcode == RISCV::PseudoVX_FPRG4_RELOAD;
+    break;
+  case RISCV::PseudoVX_FPRG8_SPILL:
+  case RISCV::PseudoVX_FPRG8_RELOAD:
+    Subs = FPRG8Subs;
+    IsFP = true;
+    IsLoad = Opcode == RISCV::PseudoVX_FPRG8_RELOAD;
+    break;
+  default:
+    return std::nullopt;
+  }
+
+  unsigned ScalarOpcode;
+  if (IsFP)
+    ScalarOpcode = IsLoad ? RISCV::FLW : RISCV::FSW;
+  else if (IsRV64)
+    ScalarOpcode = IsLoad ? RISCV::LD : RISCV::SD;
+  else
+    ScalarOpcode = IsLoad ? RISCV::LW : RISCV::SW;
+  unsigned ElemBytes = (!IsFP && IsRV64) ? 8 : 4;
+  return VXGroupSpillInfo{Subs, ScalarOpcode, ElemBytes, IsLoad};
+}
+
 void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
                                          MachineBasicBlock::iterator I,
                                          Register SrcReg, bool IsKill, int FI,
@@ -661,91 +728,25 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   } else if (RISCV::FPR64RegClass.hasSubClassEq(RC)) {
     Opcode = RISCV::FSD;
     IsScalableVector = false;
-  } else if (RISCV::GPRG2RegClass.hasSubClassEq(RC) ||
-             RISCV::GPRG4RegClass.hasSubClassEq(RC) ||
-             RISCV::GPRG8RegClass.hasSubClassEq(RC) ||
-             RISCV::FPRG2RegClass.hasSubClassEq(RC) ||
-             RISCV::FPRG4RegClass.hasSubClassEq(RC) ||
-             RISCV::FPRG8RegClass.hasSubClassEq(RC)) {
-    // XVortex grouped GPR/FPR tuples: spill as N consecutive scalar
-    // SW/SD/FSW (one per sub-register). Without this case, RC would fall
-    // through to the VRN* checks below — VRN8M1RegClass.hasSubClassEq()
-    // returns true for GPRG4/G8 due to the tablegen-generated subclass
-    // hierarchy, causing the compiler to emit PseudoVSPILL8_M1 which
-    // expands to vs1r.v instructions. That's illegal when V is not in
-    // -march (e.g. -march=rv32imaf +xvortex), and at the same time
-    // semantically wrong: the spilled value lives in scalar GPRs, not
-    // V registers.
-    bool IsFloat = RISCV::FPRG2RegClass.hasSubClassEq(RC) ||
-                   RISCV::FPRG4RegClass.hasSubClassEq(RC) ||
-                   RISCV::FPRG8RegClass.hasSubClassEq(RC);
-    static const unsigned GPRG2Subs[] = {RISCV::sub_gpr_even,
-                                         RISCV::sub_gpr_odd};
-    static const unsigned GPRG4Subs[] = {
-        RISCV::sub_gpr_g4_0, RISCV::sub_gpr_g4_1,
-        RISCV::sub_gpr_g4_2, RISCV::sub_gpr_g4_3};
-    static const unsigned GPRG8Subs[] = {
-        RISCV::sub_gpr_g8_0, RISCV::sub_gpr_g8_1,
-        RISCV::sub_gpr_g8_2, RISCV::sub_gpr_g8_3,
-        RISCV::sub_gpr_g8_4, RISCV::sub_gpr_g8_5,
-        RISCV::sub_gpr_g8_6, RISCV::sub_gpr_g8_7};
-    static const unsigned FPRG2Subs[] = {RISCV::sub_fpr32_g2_0,
-                                         RISCV::sub_fpr32_g2_1};
-    static const unsigned FPRG4Subs[] = {
-        RISCV::sub_fpr32_g4_0, RISCV::sub_fpr32_g4_1,
-        RISCV::sub_fpr32_g4_2, RISCV::sub_fpr32_g4_3};
-    static const unsigned FPRG8Subs[] = {
-        RISCV::sub_fpr32_g8_0, RISCV::sub_fpr32_g8_1,
-        RISCV::sub_fpr32_g8_2, RISCV::sub_fpr32_g8_3,
-        RISCV::sub_fpr32_g8_4, RISCV::sub_fpr32_g8_5,
-        RISCV::sub_fpr32_g8_6, RISCV::sub_fpr32_g8_7};
-    unsigned NumSubs;
-    const unsigned *Subs;
-    unsigned ScalarOpcode;
-    unsigned ElemBytes;
-    if (RISCV::GPRG2RegClass.hasSubClassEq(RC)) {
-      NumSubs = 2; Subs = GPRG2Subs;
-      ScalarOpcode = (TRI->getRegSizeInBits(RISCV::GPRRegClass) == 32)
-                         ? RISCV::SW : RISCV::SD;
-      ElemBytes = TRI->getRegSizeInBits(RISCV::GPRRegClass) / 8;
-    } else if (RISCV::GPRG4RegClass.hasSubClassEq(RC)) {
-      NumSubs = 4; Subs = GPRG4Subs;
-      ScalarOpcode = (TRI->getRegSizeInBits(RISCV::GPRRegClass) == 32)
-                         ? RISCV::SW : RISCV::SD;
-      ElemBytes = TRI->getRegSizeInBits(RISCV::GPRRegClass) / 8;
-    } else if (RISCV::GPRG8RegClass.hasSubClassEq(RC)) {
-      NumSubs = 8; Subs = GPRG8Subs;
-      ScalarOpcode = (TRI->getRegSizeInBits(RISCV::GPRRegClass) == 32)
-                         ? RISCV::SW : RISCV::SD;
-      ElemBytes = TRI->getRegSizeInBits(RISCV::GPRRegClass) / 8;
-    } else if (RISCV::FPRG2RegClass.hasSubClassEq(RC)) {
-      NumSubs = 2; Subs = FPRG2Subs; ScalarOpcode = RISCV::FSW; ElemBytes = 4;
-    } else if (RISCV::FPRG4RegClass.hasSubClassEq(RC)) {
-      NumSubs = 4; Subs = FPRG4Subs; ScalarOpcode = RISCV::FSW; ElemBytes = 4;
-    } else {
-      NumSubs = 8; Subs = FPRG8Subs; ScalarOpcode = RISCV::FSW; ElemBytes = 4;
-    }
-    (void)IsFloat;
-    // SrcReg may still be virtual during register allocation; use the
-    // (Reg, Flags, SubRegIdx) form of addReg so subreg resolution is
-    // deferred to the regalloc / pseudo-expansion pipeline rather than
-    // calling TRI->getSubReg on a virtual register here (which crashes).
-    Align SlotAlign = MFI.getObjectAlign(FI);
-    for (unsigned i = 0; i < NumSubs; ++i) {
-      MachineMemOperand *MMO = MF->getMachineMemOperand(
-          MachinePointerInfo::getFixedStack(*MF, FI, i * ElemBytes),
-          MachineMemOperand::MOStore, ElemBytes,
-          commonAlignment(SlotAlign, i * ElemBytes));
-      BuildMI(MBB, I, DebugLoc(), get(ScalarOpcode))
-          .addReg(SrcReg,
-                  getKillRegState(IsKill && i == NumSubs - 1),
-                  Subs[i])
-          .addFrameIndex(FI)
-          .addImm(i * ElemBytes)
-          .addMemOperand(MMO)
-          .setMIFlag(Flags);
-    }
-    return;
+  } else if (RISCV::GPRG4RegClass.hasSubClassEq(RC)) {
+    // XVortex register groups spill through one pseudo each, expanded after
+    // register allocation. They are tested before the VRN* classes, whose
+    // generated sub-class relation also covers GPRG4/G8. GPRG2 has the
+    // registers of GPRPair and takes its case above.
+    Opcode = RISCV::PseudoVX_GPRG4_SPILL;
+    IsScalableVector = false;
+  } else if (RISCV::GPRG8RegClass.hasSubClassEq(RC)) {
+    Opcode = RISCV::PseudoVX_GPRG8_SPILL;
+    IsScalableVector = false;
+  } else if (RISCV::FPRG2RegClass.hasSubClassEq(RC)) {
+    Opcode = RISCV::PseudoVX_FPRG2_SPILL;
+    IsScalableVector = false;
+  } else if (RISCV::FPRG4RegClass.hasSubClassEq(RC)) {
+    Opcode = RISCV::PseudoVX_FPRG4_SPILL;
+    IsScalableVector = false;
+  } else if (RISCV::FPRG8RegClass.hasSubClassEq(RC)) {
+    Opcode = RISCV::PseudoVX_FPRG8_SPILL;
+    IsScalableVector = false;
   } else if (RISCV::VRRegClass.hasSubClassEq(RC)) {
     Opcode = RISCV::VS1R_V;
   } else if (RISCV::VRM2RegClass.hasSubClassEq(RC)) {
@@ -837,86 +838,25 @@ void RISCVInstrInfo::loadRegFromStackSlot(
   } else if (RISCV::FPR64RegClass.hasSubClassEq(RC)) {
     Opcode = RISCV::FLD;
     IsScalableVector = false;
-  } else if (RISCV::GPRG2RegClass.hasSubClassEq(RC) ||
-             RISCV::GPRG4RegClass.hasSubClassEq(RC) ||
-             RISCV::GPRG8RegClass.hasSubClassEq(RC) ||
-             RISCV::FPRG2RegClass.hasSubClassEq(RC) ||
-             RISCV::FPRG4RegClass.hasSubClassEq(RC) ||
-             RISCV::FPRG8RegClass.hasSubClassEq(RC)) {
-    // XVortex grouped GPR/FPR tuples: reload as N consecutive scalar
-    // LW/LD/FLW (one per sub-register). See the symmetric comment in
-    // storeRegToStackSlot.
-    static const unsigned GPRG2Subs[] = {RISCV::sub_gpr_even,
-                                         RISCV::sub_gpr_odd};
-    static const unsigned GPRG4Subs[] = {
-        RISCV::sub_gpr_g4_0, RISCV::sub_gpr_g4_1,
-        RISCV::sub_gpr_g4_2, RISCV::sub_gpr_g4_3};
-    static const unsigned GPRG8Subs[] = {
-        RISCV::sub_gpr_g8_0, RISCV::sub_gpr_g8_1,
-        RISCV::sub_gpr_g8_2, RISCV::sub_gpr_g8_3,
-        RISCV::sub_gpr_g8_4, RISCV::sub_gpr_g8_5,
-        RISCV::sub_gpr_g8_6, RISCV::sub_gpr_g8_7};
-    static const unsigned FPRG2Subs[] = {RISCV::sub_fpr32_g2_0,
-                                         RISCV::sub_fpr32_g2_1};
-    static const unsigned FPRG4Subs[] = {
-        RISCV::sub_fpr32_g4_0, RISCV::sub_fpr32_g4_1,
-        RISCV::sub_fpr32_g4_2, RISCV::sub_fpr32_g4_3};
-    static const unsigned FPRG8Subs[] = {
-        RISCV::sub_fpr32_g8_0, RISCV::sub_fpr32_g8_1,
-        RISCV::sub_fpr32_g8_2, RISCV::sub_fpr32_g8_3,
-        RISCV::sub_fpr32_g8_4, RISCV::sub_fpr32_g8_5,
-        RISCV::sub_fpr32_g8_6, RISCV::sub_fpr32_g8_7};
-    unsigned NumSubs;
-    const unsigned *Subs;
-    unsigned ScalarOpcode;
-    unsigned ElemBytes;
-    if (RISCV::GPRG2RegClass.hasSubClassEq(RC)) {
-      NumSubs = 2; Subs = GPRG2Subs;
-      ScalarOpcode = (TRI->getRegSizeInBits(RISCV::GPRRegClass) == 32)
-                         ? RISCV::LW : RISCV::LD;
-      ElemBytes = TRI->getRegSizeInBits(RISCV::GPRRegClass) / 8;
-    } else if (RISCV::GPRG4RegClass.hasSubClassEq(RC)) {
-      NumSubs = 4; Subs = GPRG4Subs;
-      ScalarOpcode = (TRI->getRegSizeInBits(RISCV::GPRRegClass) == 32)
-                         ? RISCV::LW : RISCV::LD;
-      ElemBytes = TRI->getRegSizeInBits(RISCV::GPRRegClass) / 8;
-    } else if (RISCV::GPRG8RegClass.hasSubClassEq(RC)) {
-      NumSubs = 8; Subs = GPRG8Subs;
-      ScalarOpcode = (TRI->getRegSizeInBits(RISCV::GPRRegClass) == 32)
-                         ? RISCV::LW : RISCV::LD;
-      ElemBytes = TRI->getRegSizeInBits(RISCV::GPRRegClass) / 8;
-    } else if (RISCV::FPRG2RegClass.hasSubClassEq(RC)) {
-      NumSubs = 2; Subs = FPRG2Subs; ScalarOpcode = RISCV::FLW; ElemBytes = 4;
-    } else if (RISCV::FPRG4RegClass.hasSubClassEq(RC)) {
-      NumSubs = 4; Subs = FPRG4Subs; ScalarOpcode = RISCV::FLW; ElemBytes = 4;
-    } else {
-      NumSubs = 8; Subs = FPRG8Subs; ScalarOpcode = RISCV::FLW; ElemBytes = 4;
-    }
-    // Symmetric to storeRegToStackSlot: use the subreg-index form of
-    // BuildMI so DstReg can still be a virtual tuple during regalloc.
-    // The defined sub-register is encoded as an EXTRACT_SUBREG-style
-    // partial def via the SubRegIdx field; the regalloc / pseudo
-    // expansion pipeline materializes the actual physical sub-register.
-    Align SlotAlign = MFI.getObjectAlign(FI);
-    for (unsigned i = 0; i < NumSubs; ++i) {
-      MachineMemOperand *MMO = MF->getMachineMemOperand(
-          MachinePointerInfo::getFixedStack(*MF, FI, i * ElemBytes),
-          MachineMemOperand::MOLoad, ElemBytes,
-          commonAlignment(SlotAlign, i * ElemBytes));
-      // The first reload defines (clobbers) the whole tuple; subsequent
-      // reloads partially redefine it. Use RegState::Undef on the first
-      // to mark the tuple as freshly defined.
-      BuildMI(MBB, I, DL, get(ScalarOpcode))
-          .addReg(DstReg,
-                  RegState::Define |
-                      (i == 0 ? RegState::Undef : 0u),
-                  Subs[i])
-          .addFrameIndex(FI)
-          .addImm(i * ElemBytes)
-          .addMemOperand(MMO)
-          .setMIFlag(Flags);
-    }
-    return;
+  } else if (RISCV::GPRG4RegClass.hasSubClassEq(RC)) {
+    // XVortex register groups reload through one pseudo each, expanded after
+    // register allocation. They are tested before the VRN* classes, whose
+    // generated sub-class relation also covers GPRG4/G8. GPRG2 has the
+    // registers of GPRPair and takes its case above.
+    Opcode = RISCV::PseudoVX_GPRG4_RELOAD;
+    IsScalableVector = false;
+  } else if (RISCV::GPRG8RegClass.hasSubClassEq(RC)) {
+    Opcode = RISCV::PseudoVX_GPRG8_RELOAD;
+    IsScalableVector = false;
+  } else if (RISCV::FPRG2RegClass.hasSubClassEq(RC)) {
+    Opcode = RISCV::PseudoVX_FPRG2_RELOAD;
+    IsScalableVector = false;
+  } else if (RISCV::FPRG4RegClass.hasSubClassEq(RC)) {
+    Opcode = RISCV::PseudoVX_FPRG4_RELOAD;
+    IsScalableVector = false;
+  } else if (RISCV::FPRG8RegClass.hasSubClassEq(RC)) {
+    Opcode = RISCV::PseudoVX_FPRG8_RELOAD;
+    IsScalableVector = false;
   } else if (RISCV::VRRegClass.hasSubClassEq(RC)) {
     Opcode = RISCV::VL1RE8_V;
   } else if (RISCV::VRM2RegClass.hasSubClassEq(RC)) {
@@ -2917,6 +2857,8 @@ bool RISCVInstrInfo::canFoldIntoAddrMode(const MachineInstr &MemI, Register Reg,
   case RISCV::FSH:
   case RISCV::FSW:
   case RISCV::FSD:
+  case RISCV::VX_FLDS_D:
+  case RISCV::VX_FLDS_Q:
     break;
   }
 

@@ -54,6 +54,9 @@ private:
                          MachineBasicBlock::iterator MBBI);
   bool expandRV32ZdinxStore(MachineBasicBlock &MBB,
                             MachineBasicBlock::iterator MBBI);
+  bool expandVXGroupSpill(MachineBasicBlock &MBB,
+                          MachineBasicBlock::iterator MBBI,
+                          const RISCV::VXGroupSpillInfo &Group);
   bool expandRV32ZdinxLoad(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator MBBI);
 #ifndef NDEBUG
@@ -166,7 +169,66 @@ bool RISCVExpandPseudo::expandMI(MachineBasicBlock &MBB,
     return expandVMSET_VMCLR(MBB, MBBI, RISCV::VMXNOR_MM);
   }
 
+  if (auto Group = RISCV::getVXGroupSpillInfo(MBBI->getOpcode(),
+                                              STI->is64Bit()))
+    return expandVXGroupSpill(MBB, MBBI, *Group);
+
   return false;
+}
+
+// An XVortex register-group spill or reload becomes one scalar store or load
+// per register of the group, at consecutive offsets.
+bool RISCVExpandPseudo::expandVXGroupSpill(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
+    const RISCV::VXGroupSpillInfo &Group) {
+  DebugLoc DL = MBBI->getDebugLoc();
+  const TargetRegisterInfo *TRI = STI->getRegisterInfo();
+  MachineFunction *MF = MBB.getParent();
+  const MachineOperand &RegOp = MBBI->getOperand(0);
+  Register Base = MBBI->getOperand(1).getReg();
+  int64_t Imm = MBBI->getOperand(2).getImm();
+  unsigned NumRegs = Group.SubRegs.size();
+  assert(isInt<12>(Imm + (NumRegs - 1) * Group.ElemBytes) &&
+         "group spill offset out of range");
+
+  // A reload into a group that holds the base register loads that register
+  // last.
+  SmallVector<unsigned, 8> Order;
+  int BaseLane = -1;
+  for (unsigned I = 0; I < NumRegs; ++I) {
+    Register Lane = TRI->getSubReg(RegOp.getReg(), Group.SubRegs[I]);
+    if (Group.IsLoad && Lane == Base)
+      BaseLane = I;
+    else
+      Order.push_back(I);
+  }
+  if (BaseLane >= 0)
+    Order.push_back(BaseLane);
+
+  for (unsigned I : Order) {
+    Register Lane = TRI->getSubReg(RegOp.getReg(), Group.SubRegs[I]);
+    unsigned Offset = I * Group.ElemBytes;
+    MachineInstrBuilder MIB =
+        BuildMI(MBB, MBBI, DL, TII->get(Group.ScalarOpcode));
+    if (Group.IsLoad)
+      MIB.addReg(Lane, RegState::Define);
+    else
+      MIB.addReg(Lane, getUndefRegState(RegOp.isUndef()));
+    MIB.addReg(Base).addImm(Imm + Offset);
+    // A spilled group may be only partly defined: the implicit use of the
+    // whole group covers lanes that hold no value, and carries the kill.
+    if (!Group.IsLoad)
+      MIB.addReg(RegOp.getReg(),
+                 RegState::Implicit | getUndefRegState(RegOp.isUndef()) |
+                     getKillRegState(RegOp.isKill() && I == Order.back()));
+    SmallVector<MachineMemOperand *, 1> MMOs;
+    for (const MachineMemOperand *MMO : MBBI->memoperands())
+      MMOs.push_back(MF->getMachineMemOperand(MMO, Offset, Group.ElemBytes));
+    MIB.setMemRefs(MMOs);
+  }
+
+  MBBI->eraseFromParent();
+  return true;
 }
 
 bool RISCVExpandPseudo::expandCCOp(MachineBasicBlock &MBB,
@@ -324,7 +386,7 @@ bool RISCVExpandPseudo::expandRV32ZdinxStore(MachineBasicBlock &MBB,
       TRI->getSubReg(MBBI->getOperand(0).getReg(), RISCV::sub_gpr_odd);
 
   auto MIBLo = BuildMI(MBB, MBBI, DL, TII->get(RISCV::SW))
-                   .addReg(Lo, getKillRegState(MBBI->getOperand(0).isKill()))
+                   .addReg(Lo, getUndefRegState(MBBI->getOperand(0).isUndef()))
                    .addReg(MBBI->getOperand(1).getReg())
                    .add(MBBI->getOperand(2));
 
@@ -333,13 +395,13 @@ bool RISCVExpandPseudo::expandRV32ZdinxStore(MachineBasicBlock &MBB,
     assert(MBBI->getOperand(2).getOffset() % 8 == 0);
     MBBI->getOperand(2).setOffset(MBBI->getOperand(2).getOffset() + 4);
     MIBHi = BuildMI(MBB, MBBI, DL, TII->get(RISCV::SW))
-                .addReg(Hi, getKillRegState(MBBI->getOperand(0).isKill()))
+                .addReg(Hi, getUndefRegState(MBBI->getOperand(0).isUndef()))
                 .add(MBBI->getOperand(1))
                 .add(MBBI->getOperand(2));
   } else {
     assert(isInt<12>(MBBI->getOperand(2).getImm() + 4));
     MIBHi = BuildMI(MBB, MBBI, DL, TII->get(RISCV::SW))
-                .addReg(Hi, getKillRegState(MBBI->getOperand(0).isKill()))
+                .addReg(Hi, getUndefRegState(MBBI->getOperand(0).isUndef()))
                 .add(MBBI->getOperand(1))
                 .addImm(MBBI->getOperand(2).getImm() + 4);
   }
@@ -353,6 +415,15 @@ bool RISCVExpandPseudo::expandRV32ZdinxStore(MachineBasicBlock &MBB,
   }
   MIBLo.setMemRefs(NewLoMMOs);
   MIBHi.setMemRefs(NewHiMMOs);
+
+  // An XVortex GPRG2 group, which shares GPRPair's registers and this spill,
+  // may be only partly defined: the implicit use of the pair covers the
+  // halves and carries the kill.
+  Register Pair = MBBI->getOperand(0).getReg();
+  bool PairUndef = MBBI->getOperand(0).isUndef();
+  MIBLo.addReg(Pair, RegState::Implicit | getUndefRegState(PairUndef));
+  MIBHi.addReg(Pair, RegState::Implicit | getUndefRegState(PairUndef) |
+                         getKillRegState(MBBI->getOperand(0).isKill()));
 
   MBBI->eraseFromParent();
   return true;

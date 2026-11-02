@@ -208,6 +208,36 @@ static DecodeStatus DecodeGPRCRegisterClass(MCInst &Inst, uint32_t RegNo,
   return MCDisassembler::Success;
 }
 
+// XVortex aligned FPR32 groups: fd must be a multiple of the group size.
+template <unsigned RCID, unsigned SubReg0, unsigned N>
+static DecodeStatus decodeFPRGroup(MCInst &Inst, uint32_t RegNo,
+                                   const MCDisassembler *Decoder) {
+  if (RegNo >= 32 || RegNo % N)
+    return MCDisassembler::Fail;
+
+  const RISCVDisassembler *Dis =
+      static_cast<const RISCVDisassembler *>(Decoder);
+  const MCRegisterInfo *RI = Dis->getContext().getRegisterInfo();
+  MCRegister Reg = RI->getMatchingSuperReg(RISCV::F0_F + RegNo, SubReg0,
+                                           &RISCVMCRegisterClasses[RCID]);
+  Inst.addOperand(MCOperand::createReg(Reg));
+  return MCDisassembler::Success;
+}
+
+static DecodeStatus DecodeFPRG2RegisterClass(MCInst &Inst, uint32_t RegNo,
+                                             uint64_t Address,
+                                             const MCDisassembler *Decoder) {
+  return decodeFPRGroup<RISCV::FPRG2RegClassID, RISCV::sub_fpr32_g2_0, 2>(
+      Inst, RegNo, Decoder);
+}
+
+static DecodeStatus DecodeFPRG4RegisterClass(MCInst &Inst, uint32_t RegNo,
+                                             uint64_t Address,
+                                             const MCDisassembler *Decoder) {
+  return decodeFPRGroup<RISCV::FPRG4RegClassID, RISCV::sub_fpr32_g4_0, 4>(
+      Inst, RegNo, Decoder);
+}
+
 static DecodeStatus DecodeGPRPairRegisterClass(MCInst &Inst, uint32_t RegNo,
                                                uint64_t Address,
                                                const MCDisassembler *Decoder) {
@@ -725,6 +755,8 @@ DecodeStatus RISCVDisassembler::getInstruction32(MCInst &MI, uint64_t &Size,
                         "Qualcomm uC Conditional Move custom opcode table");
   TRY_TO_DECODE_FEATURE(RISCV::FeatureVendorXqciint, DecoderTableXqciint32,
                         "Qualcomm uC Interrupts custom opcode table");
+  TRY_TO_DECODE_FEATURE(RISCV::FeatureVendorXVortex, DecoderTableXVortex32,
+                        "Vortex custom opcode table");
   TRY_TO_DECODE(true, DecoderTable32, "RISCV32 table");
 
   return MCDisassembler::Fail;

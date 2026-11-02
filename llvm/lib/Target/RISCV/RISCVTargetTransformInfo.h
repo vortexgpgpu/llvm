@@ -104,6 +104,24 @@ public:
   bool isAlwaysUniform(const Value *V);
   bool hasBranchDivergence(const Function *F);
 
+  // Vortex address spaces: generic pointers are flat; InferAddressSpaces
+  // narrows them to global (1) or local (3).
+  unsigned getFlatAddressSpace() const {
+    return ST->hasVendorXVortex() ? VortexAS::Generic : ~0u;
+  }
+  unsigned getAssumedAddrSpace(const Value *V) const;
+
+  // XVortex: the LoadStoreVectorizer forms the aligned 8- and 16-byte float
+  // chains from local memory that vx_flds.d/.q load. Every other access and
+  // every store stays scalar.
+  unsigned getLoadStoreVecRegBitWidth(unsigned AddrSpace) const;
+  bool isLegalToVectorizeLoad(LoadInst *LI) const;
+  bool isLegalToVectorizeStore(StoreInst *SI) const;
+  bool isLegalToVectorizeLoadChain(unsigned ChainSizeInBytes, Align Alignment,
+                                   unsigned AddrSpace) const;
+  bool isLegalToVectorizeStoreChain(unsigned ChainSizeInBytes, Align Alignment,
+                                    unsigned AddrSpace) const;
+
   bool shouldExpandReduction(const IntrinsicInst *II) const;
   bool supportsScalableVectors() const { return ST->hasVInstructions(); }
   bool enableOrderedReductions() const { return true; }

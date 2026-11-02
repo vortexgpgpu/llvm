@@ -1,0 +1,40 @@
+# RUN: llc -mtriple=riscv32 -mattr=+f,+xvortex -run-pass=riscv-expand-pseudo \
+# RUN:   -verify-machineinstrs -o - %s | FileCheck %s
+
+# The XVortex group spill and reload pseudos after register allocation.
+
+---
+# Only two lanes of the group hold values: the implicit use of the whole
+# group covers the others.
+name: spill_partial_group
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $f10_f, $f11_f, $x2
+
+    ; CHECK-LABEL: name: spill_partial_group
+    ; CHECK: FSW $f8_f, $x2, 16, implicit $f8_f9_f10_f11_fquad
+    ; CHECK-NEXT: FSW $f9_f, $x2, 20, implicit $f8_f9_f10_f11_fquad
+    ; CHECK-NEXT: FSW $f10_f, $x2, 24, implicit $f8_f9_f10_f11_fquad
+    ; CHECK-NEXT: FSW $f11_f, $x2, 28, implicit killed $f8_f9_f10_f11_fquad
+    ; CHECK-NEXT: PseudoRET
+    PseudoVX_FPRG4_SPILL killed $f8_f9_f10_f11_fquad, $x2, 16
+    PseudoRET
+...
+---
+# The base register is a lane of the reloaded group: it is loaded last.
+name: reload_base_in_group
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x10
+
+    ; CHECK-LABEL: name: reload_base_in_group
+    ; CHECK: $x8 = LW $x10, 0
+    ; CHECK-NEXT: $x9 = LW $x10, 4
+    ; CHECK-NEXT: $x11 = LW $x10, 12
+    ; CHECK-NEXT: $x10 = LW $x10, 8
+    ; CHECK-NEXT: PseudoRET
+    $x8_x9_x10_x11 = PseudoVX_GPRG4_RELOAD $x10, 0
+    PseudoRET implicit $x8_x9_x10_x11
+...

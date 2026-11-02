@@ -18,6 +18,8 @@
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
+class Function;
+class Value;
 class ModulePass;
 class FunctionPass;
 class InstructionSelector;
@@ -93,6 +95,22 @@ void initializeRISCVZacasABIFixPass(PassRegistry &);
 
 ModulePass *createRISCVVortexKEntryPass();
 void initializeRISCVVortexKEntryPass(PassRegistry &);
+
+// Vortex GPU address spaces. Generic pointers reach both memories through the
+// LSU's LMEM window check; vx_flds.d/.q read local memory only.
+namespace VortexAS {
+enum : unsigned { Generic = 0, Global = 1, Local = 3 };
+} // namespace VortexAS
+
+// True for a Vortex kernel entry: the "vortex-kernel" function attribute or
+// the `vortex.kernel` annotation the `__kernel` macro emits.
+bool isVortexKernelEntry(const Function &F);
+
+// True when no object Ptr may point into is a global: vx_flds.d/.q decode only
+// the low address bits, which reach local memory through a window address
+// (__local_mem(), a kernel argument) but not through an addrspace(3) global
+// laid out in .bss.
+bool isVortexLocalWindowPointer(const Value *Ptr);
 
 InstructionSelector *
 createRISCVInstructionSelector(const RISCVTargetMachine &,

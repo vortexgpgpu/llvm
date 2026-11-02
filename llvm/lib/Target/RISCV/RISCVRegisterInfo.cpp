@@ -82,35 +82,6 @@ RISCVRegisterInfo::RISCVRegisterInfo(unsigned HwMode)
 // PEI for leaf kernels automatically (saved only when actually clobbered).
 static const MCPhysReg CSR_VortexKernel_SaveList[] = {RISCV::X1, 0};
 
-static bool isVortexKernelEntry(const Function &F) {
-  if (F.hasFnAttribute("vortex-kernel"))
-    return true;
-  const Module *M = F.getParent();
-  if (!M)
-    return false;
-  const GlobalVariable *GA = M->getGlobalVariable("llvm.global.annotations");
-  if (!GA || !GA->hasInitializer())
-    return false;
-  const auto *CA = dyn_cast<ConstantArray>(GA->getInitializer());
-  if (!CA)
-    return false;
-  for (const Value *Op : CA->operands()) {
-    const auto *CS = dyn_cast<ConstantStruct>(Op);
-    if (!CS || CS->getNumOperands() < 2)
-      continue;
-    if (CS->getOperand(0)->stripPointerCasts() != &F)
-      continue;
-    const auto *StrGV =
-        dyn_cast<GlobalVariable>(CS->getOperand(1)->stripPointerCasts());
-    if (!StrGV || !StrGV->hasInitializer())
-      continue;
-    const auto *Str = dyn_cast<ConstantDataArray>(StrGV->getInitializer());
-    if (Str && Str->isCString() && Str->getAsCString() == "vortex.kernel")
-      return true;
-  }
-  return false;
-}
-
 const MCPhysReg *
 RISCVRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
   auto &Subtarget = MF->getSubtarget<RISCVSubtarget>();
@@ -568,6 +539,13 @@ bool RISCVRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
       // This instruction will be split into 2 instructions. The second
       // instruction will add 4 to the immediate. If that would overflow 12
       // bits, we can't fold the offset.
+      MI.getOperand(FIOperandNum + 1).ChangeToImmediate(0);
+    } else if (auto Group = RISCV::getVXGroupSpillInfo(
+                   Opc, MF.getSubtarget<RISCVSubtarget>().is64Bit());
+               Group && !isInt<12>(Lo12 + (Group->SubRegs.size() - 1) *
+                                              Group->ElemBytes)) {
+      // An XVortex group spill becomes one access per register, the last at
+      // the immediate plus the group size minus one element.
       MI.getOperand(FIOperandNum + 1).ChangeToImmediate(0);
     } else {
       // We can encode an add with 12 bit signed immediate in the immediate

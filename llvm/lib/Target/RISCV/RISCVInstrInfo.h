@@ -328,6 +328,17 @@ bool isRVVSpill(const MachineInstr &MI);
 std::optional<std::pair<unsigned, unsigned>>
 isRVVSpillForZvlsseg(unsigned Opcode);
 
+// XVortex register-group spill and reload pseudos: the register of each lane
+// and the scalar access that moves it.
+struct VXGroupSpillInfo {
+  ArrayRef<unsigned> SubRegs;
+  unsigned ScalarOpcode;
+  unsigned ElemBytes;
+  bool IsLoad;
+};
+std::optional<VXGroupSpillInfo> getVXGroupSpillInfo(unsigned Opcode,
+                                                    bool IsRV64);
+
 bool isFaultFirstLoad(const MachineInstr &MI);
 
 // Implemented in RISCVGenInstrInfo.inc

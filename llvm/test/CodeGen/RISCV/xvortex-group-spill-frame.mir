@@ -1,0 +1,60 @@
+# RUN: llc -mtriple=riscv32 -mattr=+f,+xvortex -start-before=prologepilog \
+# RUN:   -verify-machineinstrs -o - %s | FileCheck %s
+
+# A group spill slot near the end of the 12-bit offset range. The last lane
+# is at the slot offset plus 12: when that overflows, the slot address goes
+# into a register and the lanes use offsets 0..12 from it.
+
+# CHECK-LABEL: spill_offset_overflows:
+# CHECK:         addi a0, sp, 2044
+# CHECK-NEXT:    fsw fa2, 0(a0)
+# CHECK-NEXT:    fsw fa3, 4(a0)
+# CHECK-NEXT:    fsw fa4, 8(a0)
+# CHECK-NEXT:    fsw fa5, 12(a0)
+# CHECK-NEXT:    flw fa2, 0(a0)
+# CHECK-NEXT:    flw fa3, 4(a0)
+# CHECK-NEXT:    flw fa4, 8(a0)
+# CHECK-NEXT:    flw fa5, 12(a0)
+
+# CHECK-LABEL: spill_offset_fits:
+# CHECK:         fsw fa2, 2028(sp)
+# CHECK-NEXT:    fsw fa3, 2032(sp)
+# CHECK-NEXT:    fsw fa4, 2036(sp)
+# CHECK-NEXT:    fsw fa5, 2040(sp)
+# CHECK-NEXT:    flw fa2, 2028(sp)
+# CHECK-NEXT:    flw fa3, 2032(sp)
+# CHECK-NEXT:    flw fa4, 2036(sp)
+# CHECK-NEXT:    flw fa5, 2040(sp)
+
+---
+name: spill_offset_overflows
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 4, alignment: 4 }
+  - { id: 1, type: spill-slot, size: 16, alignment: 4 }
+  - { id: 2, type: default, size: 2032, alignment: 4 }
+body: |
+  bb.0:
+    liveins: $f12_f13_f14_f15_fquad, $x10
+
+    SW killed $x10, %stack.0, 0 :: (store (s32) into %stack.0)
+    PseudoVX_FPRG4_SPILL killed $f12_f13_f14_f15_fquad, %stack.1, 0 :: (store (s128) into %stack.1, align 4)
+    $f12_f13_f14_f15_fquad = PseudoVX_FPRG4_RELOAD %stack.1, 0 :: (load (s128) from %stack.1, align 4)
+    PseudoRET implicit $f12_f13_f14_f15_fquad
+...
+---
+name: spill_offset_fits
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 4, alignment: 4 }
+  - { id: 1, type: spill-slot, size: 16, alignment: 4 }
+  - { id: 2, type: default, size: 2024, alignment: 4 }
+body: |
+  bb.0:
+    liveins: $f12_f13_f14_f15_fquad, $x10
+
+    SW killed $x10, %stack.0, 0 :: (store (s32) into %stack.0)
+    PseudoVX_FPRG4_SPILL killed $f12_f13_f14_f15_fquad, %stack.1, 0 :: (store (s128) into %stack.1, align 4)
+    $f12_f13_f14_f15_fquad = PseudoVX_FPRG4_RELOAD %stack.1, 0 :: (load (s128) from %stack.1, align 4)
+    PseudoRET implicit $f12_f13_f14_f15_fquad
+...

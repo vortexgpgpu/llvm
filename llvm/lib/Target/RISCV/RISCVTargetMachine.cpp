@@ -38,7 +38,10 @@
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/InferAddressSpaces.h"
+#include "llvm/Transforms/Vectorize/LoadStoreVectorizer.h"
 #include "llvm/Transforms/Vectorize/LoopIdiomVectorize.h"
+#include "VortexAliasAnalysis.h"
 #include "VortexBranchDivergence.h"
 #include <cstdlib>
 #include <optional>
@@ -194,6 +197,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   initializeRISCVGatherScatterLoweringPass(*PR);
   initializeRISCVCodeGenPreparePass(*PR);
   initializeRISCVVortexKEntryPass(*PR);
+  initializeVortexAAWrapperPassPass(*PR);
   initializeRISCVPostRAExpandPseudoPass(*PR);
   initializeRISCVMergeBaseOffsetOptPass(*PR);
   initializeRISCVOptWInstrsPass(*PR);
@@ -353,9 +357,20 @@ RISCVTargetMachine::getTargetTransformInfo(const Function &F) const {
 // for all memory accesses, so it is reasonable to assume that an
 // implementation has no-op address space casts. If an implementation makes a
 // change to this, they can override it here.
+// This holds for the Vortex address spaces too: a local pointer keeps its LMEM
+// window address, which local memory reduces to its low address bits.
 bool RISCVTargetMachine::isNoopAddrSpaceCast(unsigned SrcAS,
                                              unsigned DstAS) const {
   return true;
+}
+
+bool RISCVTargetMachine::hasVendorXVortex() const {
+  return getMCSubtargetInfo()->hasFeature(RISCV::FeatureVendorXVortex);
+}
+
+void RISCVTargetMachine::registerDefaultAliasAnalyses(AAManager &AAM) {
+  if (hasVendorXVortex())
+    AAM.registerFunctionAnalysis<VortexAA>();
 }
 
 namespace {
@@ -535,6 +550,22 @@ void RISCVPassConfig::addIRPasses() {
   addPass(createAtomicExpandLegacyPass());
   addPass(createRISCVZacasABIFixPass());
   addPass(createRISCVVortexKEntryPass());
+
+  if (getOptLevel() != CodeGenOptLevel::None &&
+      getTM<RISCVTargetMachine>().hasVendorXVortex()) {
+    addPass(createVortexAAWrapperPass());
+    addPass(createExternalAAWrapperPass([](Pass &P, Function &,
+                                           AAResults &AAR) {
+      if (auto *WrapperPass = P.getAnalysisIfAvailable<VortexAAWrapperPass>())
+        AAR.addAAResult(WrapperPass->getResult());
+    }));
+    // Recover global/local address spaces the middle end did not, so local
+    // load chains can become vx_flds.d/.q.
+    addPass(createInferAddressSpacesPass());
+    // Merge aligned local float loads into the v2f32/v4f32 loads that select
+    // vx_flds.d/.q; the TTI keeps every other access scalar.
+    addPass(createLoadStoreVectorizerPass());
+  }
 
   if (getOptLevel() != CodeGenOptLevel::None) {
     if (EnableLoopDataPrefetch)
@@ -739,6 +770,30 @@ void RISCVTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
                                                  OptimizationLevel Level) {
     LPM.addPass(LoopIdiomVectorizePass(LoopIdiomVectorizeStyle::Predicated));
   });
+
+  PB.registerAnalysisRegistrationCallback([](FunctionAnalysisManager &FAM) {
+    FAM.registerPass([] { return VortexAA(); });
+  });
+  PB.registerParseAACallback([](StringRef AAName, AAManager &AAM) {
+    if (AAName != "riscv-vortex-aa")
+      return false;
+    AAM.registerFunctionAnalysis<VortexAA>();
+    return true;
+  });
+
+  if (hasVendorXVortex()) {
+    // After inlining, so that pointers such as __local_mem()'s addrspace(3)
+    // cast reach their uses: local load chains then become vx_flds.d/.q,
+    // and the alias analysis separates global from local memory.
+    PB.registerCGSCCOptimizerLateEPCallback(
+        [](CGSCCPassManager &PM, OptimizationLevel Level) {
+          if (Level.getSpeedupLevel() == 0)
+            return;
+          FunctionPassManager FPM;
+          FPM.addPass(InferAddressSpacesPass());
+          PM.addPass(createCGSCCToFunctionPassAdaptor(std::move(FPM)));
+        });
+  }
 
   if (gVortexBranchDivergenceMode != 0 &&
       gVortexBranchDivergenceOptLevel >= 3) {

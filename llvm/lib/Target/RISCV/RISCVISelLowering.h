@@ -502,7 +502,9 @@ enum NodeType : unsigned {
   TH_LDD,
   TH_SWD,
   TH_SDD,
-  LAST_MEMORY_OPCODE = TH_SDD,
+  // XVortex vx_flds.d/.q: an aligned v2f32/v4f32 local-memory load.
+  VX_FLDS,
+  LAST_MEMORY_OPCODE = VX_FLDS,
 };
 // clang-format on
 } // namespace RISCVISD

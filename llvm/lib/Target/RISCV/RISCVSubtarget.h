@@ -182,6 +182,12 @@ public:
   }
 
   bool is64Bit() const { return IsRV64; }
+  // XVortex vx_flds.d/.q: wide local-memory loads into aligned FPR32 groups,
+  // defined on RV32 with FLEN 32. With V, v2f32/v4f32 are RVV values instead.
+  bool hasVortexWideLocalLoads() const {
+    return hasVendorXVortex() && !is64Bit() && hasStdExtF() &&
+           !hasStdExtD() && !useRVVForFixedLengthVectors();
+  }
   MVT getXLenVT() const {
     return is64Bit() ? MVT::i64 : MVT::i32;
   }
