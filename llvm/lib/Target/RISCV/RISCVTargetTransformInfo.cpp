@@ -2671,7 +2671,7 @@ bool llvm::isVortexLocalWindowPointer(const Value *Ptr) {
 }
 
 unsigned RISCVTTIImpl::getLoadStoreVecRegBitWidth(unsigned AddrSpace) const {
-  if (ST->hasVortexWideLocalLoads() && AddrSpace == VortexAS::Local)
+  if (ST->hasVortexWideMem() && AddrSpace == VortexAS::Local)
     return 128;
   return BaseT::getLoadStoreVecRegBitWidth(AddrSpace);
 }
@@ -2679,7 +2679,7 @@ unsigned RISCVTTIImpl::getLoadStoreVecRegBitWidth(unsigned AddrSpace) const {
 bool RISCVTTIImpl::isLegalToVectorizeLoad(LoadInst *LI) const {
   if (!ST->hasVendorXVortex())
     return BaseT::isLegalToVectorizeLoad(LI);
-  return ST->hasVortexWideLocalLoads() &&
+  return ST->hasVortexWideMem() &&
          LI->getPointerAddressSpace() == VortexAS::Local &&
          LI->getType()->getScalarType()->isFloatTy() &&
          isVortexLocalWindowPointer(LI->getPointerOperand());
@@ -2697,8 +2697,8 @@ bool RISCVTTIImpl::isLegalToVectorizeLoadChain(unsigned ChainSizeInBytes,
   if (!ST->hasVendorXVortex())
     return BaseT::isLegalToVectorizeLoadChain(ChainSizeInBytes, Alignment,
                                               AddrSpace);
-  // vx_flds.d/.q need the address aligned to the access size.
-  return ST->hasVortexWideLocalLoads() && AddrSpace == VortexAS::Local &&
+  // vx_flw.d/.q need the address aligned to the access size.
+  return ST->hasVortexWideMem() && AddrSpace == VortexAS::Local &&
          (ChainSizeInBytes == 8 || ChainSizeInBytes == 16) &&
          Alignment.value() >= ChainSizeInBytes;
 }

@@ -502,9 +502,10 @@ enum NodeType : unsigned {
   TH_LDD,
   TH_SWD,
   TH_SDD,
-  // XVortex vx_flds.d/.q: an aligned v2f32/v4f32 local-memory load.
-  VX_FLDS,
-  LAST_MEMORY_OPCODE = VX_FLDS,
+  // XVortex vx_flw.d/.q and vx_fsw.d/.q: a v2f32/v4f32 load or store.
+  VX_FLW,
+  VX_FSW,
+  LAST_MEMORY_OPCODE = VX_FSW,
 };
 // clang-format on
 } // namespace RISCVISD
@@ -969,6 +970,7 @@ private:
   SDValue lowerVectorTruncLike(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerVectorFPExtendOrRoundLike(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerINSERT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerXVortexBuildVector(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerEXTRACT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, SelectionDAG &DAG) const;

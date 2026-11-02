@@ -970,6 +970,21 @@ public:
            VK == RISCVMCExpr::VK_RISCV_None;
   }
 
+  // XVortex wide accesses: a constant multiple of 2^LsbZeros.
+  template <unsigned LsbZeros> bool isSImm12LsbZero() const {
+    if (!isImm())
+      return false;
+    RISCVMCExpr::VariantKind VK = RISCVMCExpr::VK_RISCV_None;
+    int64_t Imm;
+    bool IsConstantImm = evaluateConstantImm(getImm(), Imm, VK);
+    return IsConstantImm &&
+           isShiftedInt<12 - LsbZeros, LsbZeros>(
+               fixImmediateForRV32(Imm, isRV64Imm())) &&
+           VK == RISCVMCExpr::VK_RISCV_None;
+  }
+  bool isSImm12Lsb000() const { return isSImm12LsbZero<3>(); }
+  bool isSImm12Lsb0000() const { return isSImm12LsbZero<4>(); }
+
   bool isSImm13Lsb0() const { return isBareSimmNLsb0<13>(); }
 
   bool isSImm10Lsb0000NonZero() const {
@@ -1701,6 +1716,14 @@ bool RISCVAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     return generateImmOutOfRangeError(
         Operands, ErrorInfo, -(1 << 11), (1 << 11) - 32,
         "immediate must be a multiple of 32 bytes in the range");
+  case Match_InvalidSImm12Lsb000:
+    return generateImmOutOfRangeError(
+        Operands, ErrorInfo, -(1 << 11), (1 << 11) - 8,
+        "immediate must be a multiple of 8 bytes in the range");
+  case Match_InvalidSImm12Lsb0000:
+    return generateImmOutOfRangeError(
+        Operands, ErrorInfo, -(1 << 11), (1 << 11) - 16,
+        "immediate must be a multiple of 16 bytes in the range");
   case Match_InvalidSImm13Lsb0:
     return generateImmOutOfRangeError(
         Operands, ErrorInfo, -(1 << 12), (1 << 12) - 2,

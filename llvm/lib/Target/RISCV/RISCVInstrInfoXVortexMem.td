@@ -1,4 +1,4 @@
-//===-- RISCVInstrInfoXVortexMem.td - Vortex wide loads ----*- tablegen -*-===//
+//===-- RISCVInstrInfoXVortexMem.td - Vortex wide accesses -*- tablegen -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,49 +6,89 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Wide local-memory loads of the Vortex GPU (custom-3, I-type, the fld/flq
-// layout):
+// Wide loads and stores of the Vortex GPU (custom-3):
 //
-//   vx_flds.d fd, imm12(rs1)   funct3 3: 64 bits per thread into fd, fd+1
-//   vx_flds.q fd, imm12(rs1)   funct3 4: 128 bits per thread into fd..fd+3
+//   vx_flw.d fd, imm12(rs1)    I-type, funct3 3: fd, fd+1    <- 2 words
+//   vx_flw.q fd, imm12(rs1)    I-type, funct3 4: fd..fd+3    <- 4 words
+//   vx_fsw.d fs2, imm12(rs1)   S-type, funct3 5: 2 words <- fs2, fs2+1
+//   vx_fsw.q fs2, imm12(rs1)   S-type, funct3 6: 4 words <- fs2..fs2+3
 //
-// fd is an aligned FPR32 group (FPRG2 / FPRG4), imm12 a signed byte offset,
-// and the address must be 8- / 16-byte aligned. They are defined on RV32 with
-// FLEN 32 and read local memory only, which decodes the low address bits, so
-// a local pointer's window address works as is. Selected for aligned
-// addrspace(3) v2f32 / v4f32 loads; the LoadStoreVectorizer forms those from
-// scalar local loads.
+// Each is exactly its sequence of flw/fsw: word k at rs1 + imm12 + 4k to or
+// from register fd/fs2 + k, at any address, with 4-byte alignment. The
+// register is an aligned FPR32 group (FPRG2 / FPRG4) and imm12 a multiple of
+// 8 (.d) or 16 (.q), so the hardware expands the macro-op without an adder.
+// Defined on RV32 with FLEN 32. Selected for v2f32 / v4f32 loads and stores.
 //
 //===----------------------------------------------------------------------===//
 
-def SDT_RISCVVXFlds : SDTypeProfile<1, 1, [SDTCisVec<0>, SDTCisPtrTy<1>]>;
-def riscv_vx_flds : SDNode<"RISCVISD::VX_FLDS", SDT_RISCVVXFlds,
-                           [SDNPHasChain, SDNPMayLoad, SDNPMemOperand]>;
+// A 12-bit signed immediate that is a multiple of 8 / 16.
+class VXSImm12LsbZero<int LsbZeros, string Suffix>
+    : RISCVOp, ImmLeaf<XLenVT, "return isShiftedInt<" # !sub(12, LsbZeros) #
+                               ", " # LsbZeros # ">(Imm);"> {
+  let ParserMatchClass = SImmAsmOperand<12, Suffix>;
+  let EncoderMethod = "getImmOpValue";
+  let DecoderMethod = "decodeSImmOperandLsbZero<12, " # LsbZeros # ">";
+  let MCOperandPredicate = "int64_t Imm; return MCOp.evaluateAsConstantImm(Imm) && "
+                           "isShiftedInt<" # !sub(12, LsbZeros) # ", " #
+                           LsbZeros # ">(Imm);";
+  let OperandType = "OPERAND_SIMM12_" # !toupper(Suffix);
+}
+
+def simm12_lsb000 : VXSImm12LsbZero<3, "Lsb000">;
+def simm12_lsb0000 : VXSImm12LsbZero<4, "Lsb0000">;
+
+// Base register plus an offset folded only when it is a multiple of 8 / 16.
+def AddrRegImmLsb000 : ComplexPattern<iPTR, 2, "SelectAddrRegImmLsb000">;
+def AddrRegImmLsb0000 : ComplexPattern<iPTR, 2, "SelectAddrRegImmLsb0000">;
+
+def SDT_RISCVVXFlw : SDTypeProfile<1, 1, [SDTCisVec<0>, SDTCisPtrTy<1>]>;
+def SDT_RISCVVXFsw : SDTypeProfile<0, 2, [SDTCisVec<0>, SDTCisPtrTy<1>]>;
+def riscv_vx_flw : SDNode<"RISCVISD::VX_FLW", SDT_RISCVVXFlw,
+                          [SDNPHasChain, SDNPMayLoad, SDNPMemOperand]>;
+def riscv_vx_fsw : SDNode<"RISCVISD::VX_FSW", SDT_RISCVVXFsw,
+                          [SDNPHasChain, SDNPMayStore, SDNPMemOperand]>;
 
 let hasSideEffects = 0, mayLoad = 1, mayStore = 0 in
-class VXFldsWide<bits<3> funct3, string opcodestr, RegisterClass rty>
+class VXFlwWide<bits<3> funct3, string opcodestr, RegisterClass rty,
+                DAGOperand immty>
     : RVInstI<funct3, OPC_CUSTOM_3, (outs rty:$rd),
-              (ins GPRMem:$rs1, simm12:$imm12), opcodestr,
+              (ins GPRMem:$rs1, immty:$imm12), opcodestr,
               "$rd, ${imm12}(${rs1})">,
       Sched<[WriteFLD32, ReadFMemBase]>;
 
-// FLEN 32: the destinations are 32-bit FP registers.
+let hasSideEffects = 0, mayLoad = 0, mayStore = 1 in
+class VXFswWide<bits<3> funct3, string opcodestr, RegisterClass rty,
+                DAGOperand immty>
+    : RVInstS<funct3, OPC_CUSTOM_3, (outs),
+              (ins rty:$rs2, GPRMem:$rs1, immty:$imm12), opcodestr,
+              "$rs2, ${imm12}(${rs1})">,
+      Sched<[WriteFST32, ReadFStoreData, ReadFMemBase]>;
+
+// FLEN 32: the registers are 32-bit FP registers.
 def NoStdExtD : Predicate<"!Subtarget->hasStdExtD()">,
                 AssemblerPredicate<(all_of (not FeatureStdExtD)),
                                    "FLEN 32 ('D' disabled)">;
 
 let Predicates = [HasVendorXVortex, HasStdExtF, NoStdExtD, IsRV32] in {
 let DecoderNamespace = "XVortex" in {
-def VX_FLDS_D : VXFldsWide<0b011, "vx_flds.d", FPRG2>;
-def VX_FLDS_Q : VXFldsWide<0b100, "vx_flds.q", FPRG4>;
+def VX_FLW_D : VXFlwWide<0b011, "vx_flw.d", FPRG2, simm12_lsb000>;
+def VX_FLW_Q : VXFlwWide<0b100, "vx_flw.q", FPRG4, simm12_lsb0000>;
+def VX_FSW_D : VXFswWide<0b101, "vx_fsw.d", FPRG2, simm12_lsb000>;
+def VX_FSW_Q : VXFswWide<0b110, "vx_fsw.q", FPRG4, simm12_lsb0000>;
 }
 
-def : Pat<(v2f32 (riscv_vx_flds
-                     (AddrRegImm (XLenVT GPR:$rs1), simm12:$imm12))),
-          (VX_FLDS_D GPR:$rs1, simm12:$imm12)>;
-def : Pat<(v4f32 (riscv_vx_flds
-                     (AddrRegImm (XLenVT GPR:$rs1), simm12:$imm12))),
-          (VX_FLDS_Q GPR:$rs1, simm12:$imm12)>;
+def : Pat<(v2f32 (riscv_vx_flw
+                     (AddrRegImmLsb000 (XLenVT GPR:$rs1), simm12_lsb000:$imm12))),
+          (VX_FLW_D GPR:$rs1, simm12_lsb000:$imm12)>;
+def : Pat<(v4f32 (riscv_vx_flw
+                     (AddrRegImmLsb0000 (XLenVT GPR:$rs1), simm12_lsb0000:$imm12))),
+          (VX_FLW_Q GPR:$rs1, simm12_lsb0000:$imm12)>;
+def : Pat<(riscv_vx_fsw (v2f32 FPRG2:$rs2),
+                        (AddrRegImmLsb000 (XLenVT GPR:$rs1), simm12_lsb000:$imm12)),
+          (VX_FSW_D FPRG2:$rs2, GPR:$rs1, simm12_lsb000:$imm12)>;
+def : Pat<(riscv_vx_fsw (v4f32 FPRG4:$rs2),
+                        (AddrRegImmLsb0000 (XLenVT GPR:$rs1), simm12_lsb0000:$imm12)),
+          (VX_FSW_Q FPRG4:$rs2, GPR:$rs1, simm12_lsb0000:$imm12)>;
 } // Predicates = [HasVendorXVortex, HasStdExtF, NoStdExtD, IsRV32]
 
 // Spill and reload of the XVortex register groups. Each stays one instruction

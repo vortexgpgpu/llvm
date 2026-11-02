@@ -257,8 +257,12 @@ def GPRG8 : RISCVRegisterClass<[v8i32, v8i64], 256, (add
     X0_X1_X2_X3_X4_X5_X6_X7
 )>;
 
+// The FPR groups spill as one flw/fsw per register (like the GPR groups'
+// XLen accesses), so their spill slots need only 4-byte alignment; a larger
+// one would require stack realignment after the frame pointer was decided.
+
 // FPRG2 — 2-aligned tuple of 2 FPR32 regs. Carries v2f32.
-def FPRG2 : RISCVRegisterClass<[v2f32], 64, (add
+def FPRG2 : RISCVRegisterClass<[v2f32], 32, (add
     F10_F11_FPair, F12_F13_FPair, F14_F15_FPair,
     F0_F1_FPair, F2_F3_FPair, F4_F5_FPair, F6_F7_FPair,
     F16_F17_FPair, F28_F29_FPair, F30_F31_FPair,
@@ -267,7 +271,7 @@ def FPRG2 : RISCVRegisterClass<[v2f32], 64, (add
 )>;
 
 // FPRG4 — 4-aligned tuple of 4 FPR32 regs. Carries v4f32.
-def FPRG4 : RISCVRegisterClass<[v4f32], 128, (add
+def FPRG4 : RISCVRegisterClass<[v4f32], 32, (add
     F8_F9_F10_F11_FQuad, F12_F13_F14_F15_FQuad,
     F16_F17_F18_F19_FQuad, F20_F21_F22_F23_FQuad,
     F24_F25_F26_F27_FQuad, F28_F29_F30_F31_FQuad,
@@ -275,7 +279,7 @@ def FPRG4 : RISCVRegisterClass<[v4f32], 128, (add
 )>;
 
 // FPRG8 — 8-aligned tuple of 8 FPR32 regs. Carries v8f32.
-def FPRG8 : RISCVRegisterClass<[v8f32], 256, (add
+def FPRG8 : RISCVRegisterClass<[v8f32], 32, (add
     F8_F9_F10_F11_F12_F13_F14_F15_FOct,
     F16_F17_F18_F19_F20_F21_F22_F23_FOct,
     F24_F25_F26_F27_F28_F29_F30_F31_FOct,

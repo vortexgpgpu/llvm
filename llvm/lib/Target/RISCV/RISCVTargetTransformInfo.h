@@ -112,7 +112,7 @@ public:
   unsigned getAssumedAddrSpace(const Value *V) const;
 
   // XVortex: the LoadStoreVectorizer forms the aligned 8- and 16-byte float
-  // chains from local memory that vx_flds.d/.q load. Every other access and
+  // chains from local memory that vx_flw.d/.q load. Every other access and
   // every store stays scalar.
   unsigned getLoadStoreVecRegBitWidth(unsigned AddrSpace) const;
   bool isLegalToVectorizeLoad(LoadInst *LI) const;

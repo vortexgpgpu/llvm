@@ -398,6 +398,16 @@ static DecodeStatus decodeSImmOperand(MCInst &Inst, uint32_t Imm,
   return MCDisassembler::Success;
 }
 
+// A signed N-bit immediate whose low LsbZeros bits must be zero.
+template <unsigned N, unsigned LsbZeros>
+static DecodeStatus decodeSImmOperandLsbZero(MCInst &Inst, uint32_t Imm,
+                                             int64_t Address,
+                                             const MCDisassembler *Decoder) {
+  if (Imm & maskTrailingOnes<uint32_t>(LsbZeros))
+    return MCDisassembler::Fail;
+  return decodeSImmOperand<N>(Inst, Imm, Address, Decoder);
+}
+
 template <unsigned N>
 static DecodeStatus decodeSImmNonZeroOperand(MCInst &Inst, uint32_t Imm,
                                              int64_t Address,

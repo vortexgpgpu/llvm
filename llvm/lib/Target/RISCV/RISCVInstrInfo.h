@@ -339,6 +339,10 @@ struct VXGroupSpillInfo {
 std::optional<VXGroupSpillInfo> getVXGroupSpillInfo(unsigned Opcode,
                                                     bool IsRV64);
 
+// The multiple of which the immediate offset of an XVortex wide access
+// (vx_flw.d/.q, vx_fsw.d/.q) must be, or 0 for any other opcode.
+unsigned getVXWideOffsetAlign(unsigned Opcode);
+
 bool isFaultFirstLoad(const MachineInstr &MI);
 
 // Implemented in RISCVGenInstrInfo.inc

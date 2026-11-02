@@ -1,11 +1,11 @@
 ; RUN: llc -mtriple=riscv32 -mattr=+f,+d,+xvortex -verify-machineinstrs < %s \
-; RUN:   | FileCheck %s --implicit-check-not=vx_flds
+; RUN:   | FileCheck %s --implicit-check-not=vx_
 ; RUN: llc -mtriple=riscv64 -mattr=+f,+xvortex -verify-machineinstrs < %s \
-; RUN:   | FileCheck %s --implicit-check-not=vx_flds
+; RUN:   | FileCheck %s --implicit-check-not=vx_
 ; RUN: llc -mtriple=riscv64 -mattr=+f,+d,+xvortex -verify-machineinstrs < %s \
-; RUN:   | FileCheck %s --implicit-check-not=vx_flds
+; RUN:   | FileCheck %s --implicit-check-not=vx_
 
-; vx_flds.d/.q exist only on RV32 with FLEN 32. With D or on RV64, aligned
+; vx_flw.d/.q exist only on RV32 with FLEN 32. With D or on RV64, aligned
 ; local float loads stay scalar.
 
 define float @local_float4(ptr addrspace(3) align 16 %p) {

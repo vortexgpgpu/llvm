@@ -560,10 +560,10 @@ void RISCVPassConfig::addIRPasses() {
         AAR.addAAResult(WrapperPass->getResult());
     }));
     // Recover global/local address spaces the middle end did not, so local
-    // load chains can become vx_flds.d/.q.
+    // load chains can become vx_flw.d/.q.
     addPass(createInferAddressSpacesPass());
     // Merge aligned local float loads into the v2f32/v4f32 loads that select
-    // vx_flds.d/.q; the TTI keeps every other access scalar.
+    // vx_flw.d/.q; the TTI keeps every other access scalar.
     addPass(createLoadStoreVectorizerPass());
   }
 
@@ -783,7 +783,7 @@ void RISCVTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
 
   if (hasVendorXVortex()) {
     // After inlining, so that pointers such as __local_mem()'s addrspace(3)
-    // cast reach their uses: local load chains then become vx_flds.d/.q,
+    // cast reach their uses: local load chains then become vx_flw.d/.q,
     // and the alias analysis separates global from local memory.
     PB.registerCGSCCOptimizerLateEPCallback(
         [](CGSCCPassManager &PM, OptimizationLevel Level) {

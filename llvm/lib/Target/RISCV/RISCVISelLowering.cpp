@@ -210,8 +210,10 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
       SetupXVortexVT(MVT::v2f32, &RISCV::FPRG2RegClass);
       SetupXVortexVT(MVT::v4f32, &RISCV::FPRG4RegClass);
       SetupXVortexVT(MVT::v8f32, &RISCV::FPRG8RegClass);
-      // A constant lane of an FP group is one of its sub-registers.
-      setOperationAction(ISD::EXTRACT_VECTOR_ELT,
+      // A constant lane of an FP group is one of its sub-registers, and a
+      // vector built from scalars is a REG_SEQUENCE of them.
+      setOperationAction({ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT,
+                          ISD::BUILD_VECTOR},
                          {MVT::v2f32, MVT::v4f32, MVT::v8f32}, Custom);
     }
   }
@@ -6845,6 +6847,15 @@ static bool getXVortexGroupLanes(const TargetLowering &TLI, MVT VT,
          TLI.isTypeLegal(VT) && TLI.getRegClassFor(VT)->getID() == RCID;
 }
 
+// A v2f32/v4f32 load or store that is one vx_flw.d/.q or vx_fsw.d/.q: each
+// word 4-byte aligned, in any address space.
+static bool isXVortexWideAccess(MVT VT, const MemSDNode *N,
+                                const RISCVSubtarget &Subtarget) {
+  return (VT == MVT::v2f32 || VT == MVT::v4f32) &&
+         Subtarget.hasVortexWideMem() && !N->isAtomic() &&
+         N->getAlign() >= Align(4);
+}
+
 // XVortex load lowering: N scalar lw/flw at consecutive offsets, then
 // REG_SEQUENCE to assemble into the grouped register class. Bypasses
 // BUILD_VECTOR (which is Expand) by emitting a MachineSDNode directly.
@@ -6867,14 +6878,9 @@ static SDValue lowerXVortexGroupedLoad(SDValue Op, SelectionDAG &DAG,
   SDValue BasePtr = Load->getBasePtr();
   auto *MMO = Load->getMemOperand();
 
-  // A local v2f32/v4f32 load through a window address, with its full
-  // alignment proven, is one vx_flds.d/.q.
-  if ((VT == MVT::v2f32 || VT == MVT::v4f32) &&
-      Subtarget.hasVortexWideLocalLoads() &&
-      Load->getAddressSpace() == VortexAS::Local && !Load->isAtomic() &&
-      Load->getAlign() >= VT.getStoreSize().getFixedValue() &&
-      MMO->getValue() && isVortexLocalWindowPointer(MMO->getValue()))
-    return DAG.getMemIntrinsicNode(RISCVISD::VX_FLDS, DL,
+  if (Load->getExtensionType() == ISD::NON_EXTLOAD &&
+      isXVortexWideAccess(VT, Load, Subtarget))
+    return DAG.getMemIntrinsicNode(RISCVISD::VX_FLW, DL,
                                    DAG.getVTList(VT, MVT::Other),
                                    {Chain, BasePtr}, VT, MMO);
 
@@ -6921,6 +6927,11 @@ static SDValue lowerXVortexGroupedStore(SDValue Op, SelectionDAG &DAG,
   SDValue BasePtr = Store->getBasePtr();
   auto *MMO = Store->getMemOperand();
 
+  if (!Store->isTruncatingStore() && isXVortexWideAccess(VT, Store, Subtarget))
+    return DAG.getMemIntrinsicNode(RISCVISD::VX_FSW, DL,
+                                   DAG.getVTList(MVT::Other),
+                                   {Chain, Val, BasePtr}, VT, MMO);
+
   SmallVector<SDValue, 8> StoreChains;
   for (unsigned i = 0; i < NumElts; ++i) {
     SDValue Lane =
@@ -6936,6 +6947,32 @@ static SDValue lowerXVortexGroupedStore(SDValue Op, SelectionDAG &DAG,
     StoreChains.push_back(ElemStore);
   }
   return DAG.getNode(ISD::TokenFactor, DL, MVT::Other, StoreChains);
+}
+
+// XVortex FP group built from scalars: a REG_SEQUENCE of its lanes.
+SDValue RISCVTargetLowering::lowerXVortexBuildVector(SDValue Op,
+                                                     SelectionDAG &DAG) const {
+  MVT VT = Op.getSimpleValueType();
+  unsigned RCID;
+  MVT ElemVT;
+  ArrayRef<unsigned> SubRegs;
+  if (!VT.isFloatingPoint() ||
+      !getXVortexGroupLanes(*this, VT, RCID, ElemVT, SubRegs))
+    return SDValue();
+
+  SDLoc DL(Op);
+  SmallVector<SDValue, 17> Ops;
+  Ops.push_back(DAG.getTargetConstant(RCID, DL, MVT::i32));
+  for (unsigned I = 0, E = SubRegs.size(); I != E; ++I) {
+    SDValue Lane = Op.getOperand(I);
+    if (Lane.isUndef())
+      Lane = SDValue(
+          DAG.getMachineNode(TargetOpcode::IMPLICIT_DEF, DL, ElemVT), 0);
+    Ops.push_back(Lane);
+    Ops.push_back(DAG.getTargetConstant(SubRegs[I], DL, MVT::i32));
+  }
+  return SDValue(DAG.getMachineNode(TargetOpcode::REG_SEQUENCE, DL, VT, Ops),
+                 0);
 }
 
 SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
@@ -7095,8 +7132,22 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
     return lowerFixedLengthVectorExtendToRVV(Op, DAG, RISCVISD::VSEXT_VL);
   case ISD::SPLAT_VECTOR_PARTS:
     return lowerSPLAT_VECTOR_PARTS(Op, DAG);
-  case ISD::INSERT_VECTOR_ELT:
+  case ISD::INSERT_VECTOR_ELT: {
+    unsigned RCID;
+    MVT ElemVT;
+    ArrayRef<unsigned> SubRegs;
+    if (getXVortexGroupLanes(*this, Op.getSimpleValueType(), RCID, ElemVT,
+                             SubRegs)) {
+      // A constant lane is a sub-register; anything else expands.
+      auto *Lane = dyn_cast<ConstantSDNode>(Op.getOperand(2));
+      if (Lane && Lane->getZExtValue() < SubRegs.size())
+        return DAG.getTargetInsertSubreg(SubRegs[Lane->getZExtValue()],
+                                         SDLoc(Op), Op.getSimpleValueType(),
+                                         Op.getOperand(0), Op.getOperand(1));
+      return SDValue();
+    }
     return lowerINSERT_VECTOR_ELT(Op, DAG);
+  }
   case ISD::EXTRACT_VECTOR_ELT:
     return lowerEXTRACT_VECTOR_ELT(Op, DAG);
   case ISD::SCALAR_TO_VECTOR: {
@@ -7535,6 +7586,8 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
   case ISD::VECTOR_SPLICE:
     return lowerVECTOR_SPLICE(Op, DAG);
   case ISD::BUILD_VECTOR:
+    if (SDValue V = lowerXVortexBuildVector(Op, DAG))
+      return V;
     return lowerBUILD_VECTOR(Op, DAG, Subtarget);
   case ISD::SPLAT_VECTOR: {
     MVT VT = Op.getSimpleValueType();
@@ -21614,7 +21667,8 @@ const char *RISCVTargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(TH_LDD)
   NODE_NAME_CASE(TH_SWD)
   NODE_NAME_CASE(TH_SDD)
-  NODE_NAME_CASE(VX_FLDS)
+  NODE_NAME_CASE(VX_FLW)
+  NODE_NAME_CASE(VX_FSW)
   NODE_NAME_CASE(VMV_V_V_VL)
   NODE_NAME_CASE(VMV_V_X_VL)
   NODE_NAME_CASE(VFMV_V_F_VL)

@@ -1,0 +1,45 @@
+# RUN: not llvm-mc -disassemble -triple=riscv32 -mattr=+f,+xvortex < %s 2>&1 \
+# RUN:     | FileCheck %s
+# RUN: not llvm-mc -disassemble -triple=riscv32 -mattr=+d,+xvortex < %s 2>&1 \
+# RUN:     | FileCheck --check-prefix=CHECK-D %s
+
+# vx_flw.d with an odd fd (ft1).
+[0xfb,0x30,0x05,0x00]
+# CHECK: [[@LINE-1]]:2: warning: invalid instruction encoding
+
+# vx_flw.q with fd not a multiple of 4 (ft2).
+[0x7b,0x41,0x05,0x00]
+# CHECK: [[@LINE-1]]:2: warning: invalid instruction encoding
+
+# vx_fsw.d with an odd fs2 (ft1).
+[0x7b,0x50,0x15,0x00]
+# CHECK: [[@LINE-1]]:2: warning: invalid instruction encoding
+
+# vx_fsw.q with fs2 not a multiple of 4 (ft2).
+[0x7b,0x60,0x25,0x00]
+# CHECK: [[@LINE-1]]:2: warning: invalid instruction encoding
+
+# Offsets that are not a multiple of the access size: vx_flw.d 4(a0),
+# vx_flw.q 8(a0), vx_fsw.d 4(a0), vx_fsw.q 8(a0).
+[0x7b,0x30,0x45,0x00]
+# CHECK: [[@LINE-1]]:2: warning: invalid instruction encoding
+[0x7b,0x40,0x85,0x00]
+# CHECK: [[@LINE-1]]:2: warning: invalid instruction encoding
+[0x7b,0x52,0x05,0x00]
+# CHECK: [[@LINE-1]]:2: warning: invalid instruction encoding
+[0x7b,0x64,0x05,0x00]
+# CHECK: [[@LINE-1]]:2: warning: invalid instruction encoding
+
+# Valid forms decode, and only with FLEN 32.
+[0x7b,0x30,0x05,0x00]
+# CHECK: vx_flw.d ft0, 0(a0)
+# CHECK-D: [[@LINE-2]]:2: warning: invalid instruction encoding
+[0x7b,0x42,0x05,0x00]
+# CHECK: vx_flw.q ft4, 0(a0)
+# CHECK-D: [[@LINE-2]]:2: warning: invalid instruction encoding
+[0x7b,0x50,0x05,0x00]
+# CHECK: vx_fsw.d ft0, 0(a0)
+# CHECK-D: [[@LINE-2]]:2: warning: invalid instruction encoding
+[0x7b,0x60,0x45,0x00]
+# CHECK: vx_fsw.q ft4, 0(a0)
+# CHECK-D: [[@LINE-2]]:2: warning: invalid instruction encoding

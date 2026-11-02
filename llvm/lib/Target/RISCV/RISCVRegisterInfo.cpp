@@ -533,6 +533,10 @@ bool RISCVRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                (Lo12 & 0b11111) != 0) {
       // Prefetch instructions require the offset to be 32 byte aligned.
       MI.getOperand(FIOperandNum + 1).ChangeToImmediate(0);
+    } else if (unsigned OffsetAlign = RISCV::getVXWideOffsetAlign(Opc);
+               OffsetAlign && Lo12 % OffsetAlign) {
+      // XVortex wide accesses take only a multiple of their size.
+      MI.getOperand(FIOperandNum + 1).ChangeToImmediate(0);
     } else if ((Opc == RISCV::PseudoRV32ZdinxLD ||
                 Opc == RISCV::PseudoRV32ZdinxSD) &&
                Lo12 >= 2044) {

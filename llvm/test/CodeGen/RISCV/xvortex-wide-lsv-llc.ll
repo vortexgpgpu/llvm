@@ -5,17 +5,18 @@
 ; RUN:   | FileCheck %s --check-prefix=NOVX
 
 ; Local (addrspace 3) float loads that the LoadStoreVectorizer merges into an
-; aligned 16- or 8-byte chain select vx_flds.q / vx_flds.d on RV32 with
-; FLEN 32. Everything else stays scalar: other address spaces, stores,
-; integer loads, chains without proven alignment, and targets without
-; XVortex (xvortex-flds-wide-unsupported.ll covers FLEN 64 and RV64).
+; aligned 16- or 8-byte chain select vx_flw.q / vx_flw.d on RV32 with
+; FLEN 32. The vectorizer leaves other address spaces, stores, integer loads
+; and chains without proven alignment scalar; explicit v2f32/v4f32 accesses
+; are wide in any address space (xvortex-wide-explicit.ll), and targets
+; without the instructions stay scalar (xvortex-wide-unsupported.ll).
 
 @lds = internal addrspace(3) global [64 x float] poison, align 16
 
 define float @local_float4(ptr addrspace(3) align 16 %p) {
 ; VX-LABEL: local_float4:
 ; VX:       # %bb.0:
-; VX-NEXT:    vx_flds.q fa2, 0(a0)
+; VX-NEXT:    vx_flw.q fa2, 0(a0)
 ; VX-NEXT:    fadd.s fa3, fa2, fa3
 ; VX-NEXT:    fmul.s fa5, fa4, fa5
 ; VX-NEXT:    fsub.s fa0, fa3, fa5
@@ -48,7 +49,7 @@ define float @local_float4(ptr addrspace(3) align 16 %p) {
 define float @local_float4_offset(ptr addrspace(3) align 16 %p) {
 ; VX-LABEL: local_float4_offset:
 ; VX:       # %bb.0:
-; VX-NEXT:    vx_flds.q fa2, 48(a0)
+; VX-NEXT:    vx_flw.q fa2, 48(a0)
 ; VX-NEXT:    fadd.s fa3, fa2, fa3
 ; VX-NEXT:    fmul.s fa5, fa4, fa5
 ; VX-NEXT:    fsub.s fa0, fa3, fa5
@@ -81,7 +82,7 @@ define float @local_float4_offset(ptr addrspace(3) align 16 %p) {
 define float @local_float2(ptr addrspace(3) align 8 %p) {
 ; VX-LABEL: local_float2:
 ; VX:       # %bb.0:
-; VX-NEXT:    vx_flds.d fa0, 0(a0)
+; VX-NEXT:    vx_flw.d fa0, 0(a0)
 ; VX-NEXT:    fsub.s fa0, fa0, fa1
 ; VX-NEXT:    ret
 ;
@@ -98,12 +99,12 @@ define float @local_float2(ptr addrspace(3) align 8 %p) {
   ret float %r
 }
 
-; Only 8-byte alignment is proven: two vx_flds.d.
+; Only 8-byte alignment is proven: two vx_flw.d.
 define float @local_float4_align8(ptr addrspace(3) align 8 %p) {
 ; VX-LABEL: local_float4_align8:
 ; VX:       # %bb.0:
-; VX-NEXT:    vx_flds.d fa0, 0(a0)
-; VX-NEXT:    vx_flds.d fa2, 8(a0)
+; VX-NEXT:    vx_flw.d fa0, 0(a0)
+; VX-NEXT:    vx_flw.d fa2, 8(a0)
 ; VX-NEXT:    fadd.s fa5, fa0, fa1
 ; VX-NEXT:    fmul.s fa4, fa2, fa3
 ; VX-NEXT:    fsub.s fa0, fa5, fa4
@@ -267,14 +268,8 @@ define void @local_store_float4(ptr addrspace(3) align 16 %p, float %a, float %b
 define void @local_store_v4f32(ptr addrspace(3) align 16 %p, ptr addrspace(1) align 16 %src) {
 ; VX-LABEL: local_store_v4f32:
 ; VX:       # %bb.0:
-; VX-NEXT:    flw fa2, 0(a1)
-; VX-NEXT:    flw fa3, 4(a1)
-; VX-NEXT:    flw fa4, 8(a1)
-; VX-NEXT:    flw fa5, 12(a1)
-; VX-NEXT:    fsw fa2, 0(a0)
-; VX-NEXT:    fsw fa3, 4(a0)
-; VX-NEXT:    fsw fa4, 8(a0)
-; VX-NEXT:    fsw fa5, 12(a0)
+; VX-NEXT:    vx_flw.q fa2, 0(a1)
+; VX-NEXT:    vx_fsw.q fa2, 0(a0)
 ; VX-NEXT:    ret
 ;
 ; NOVX-LABEL: local_store_v4f32:
@@ -332,7 +327,7 @@ define i32 @local_int4(ptr addrspace(3) align 16 %p) {
 define float @local_v4f32(ptr addrspace(3) %p) {
 ; VX-LABEL: local_v4f32:
 ; VX:       # %bb.0:
-; VX-NEXT:    vx_flds.q fa2, 0(a0)
+; VX-NEXT:    vx_flw.q fa2, 0(a0)
 ; VX-NEXT:    fadd.s fa3, fa2, fa3
 ; VX-NEXT:    fmul.s fa5, fa4, fa5
 ; VX-NEXT:    fsub.s fa0, fa3, fa5
@@ -362,10 +357,7 @@ define float @local_v4f32(ptr addrspace(3) %p) {
 define float @local_v4f32_align4(ptr addrspace(3) %p) {
 ; VX-LABEL: local_v4f32_align4:
 ; VX:       # %bb.0:
-; VX-NEXT:    flw fa2, 0(a0)
-; VX-NEXT:    flw fa3, 4(a0)
-; VX-NEXT:    flw fa4, 8(a0)
-; VX-NEXT:    flw fa5, 12(a0)
+; VX-NEXT:    vx_flw.q fa2, 0(a0)
 ; VX-NEXT:    fadd.s fa3, fa2, fa3
 ; VX-NEXT:    fmul.s fa5, fa4, fa5
 ; VX-NEXT:    fsub.s fa0, fa3, fa5
@@ -395,7 +387,7 @@ define float @local_v4f32_align4(ptr addrspace(3) %p) {
 define float @local_v2f32(ptr addrspace(3) %p) {
 ; VX-LABEL: local_v2f32:
 ; VX:       # %bb.0:
-; VX-NEXT:    vx_flds.d fa0, 0(a0)
+; VX-NEXT:    vx_flw.d fa0, 0(a0)
 ; VX-NEXT:    fsub.s fa0, fa0, fa1
 ; VX-NEXT:    ret
 ;
@@ -420,7 +412,7 @@ define float @local_mem_generic(i32 %lmem, i32 %row) {
 ; VX:       # %bb.0:
 ; VX-NEXT:    slli a1, a1, 6
 ; VX-NEXT:    add a0, a0, a1
-; VX-NEXT:    vx_flds.q fa2, 0(a0)
+; VX-NEXT:    vx_flw.q fa2, 0(a0)
 ; VX-NEXT:    fadd.s fa3, fa2, fa3
 ; VX-NEXT:    fmul.s fa5, fa4, fa5
 ; VX-NEXT:    fsub.s fa0, fa3, fa5
@@ -462,19 +454,19 @@ declare void @clobber()
 define float @local_float4_spill(ptr addrspace(3) align 16 %p) {
 ; VX-LABEL: local_float4_spill:
 ; VX:       # %bb.0:
-; VX-NEXT:    addi sp, sp, -160
-; VX-NEXT:    .cfi_def_cfa_offset 160
-; VX-NEXT:    sw ra, 156(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fs2, 152(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fs3, 148(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fs4, 144(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fs5, 140(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fs6, 136(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fs7, 132(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fs8, 128(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fs9, 124(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fs10, 120(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fs11, 116(sp) # 4-byte Folded Spill
+; VX-NEXT:    addi sp, sp, -144
+; VX-NEXT:    .cfi_def_cfa_offset 144
+; VX-NEXT:    sw ra, 140(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fs2, 136(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fs3, 132(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fs4, 128(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fs5, 124(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fs6, 120(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fs7, 116(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fs8, 112(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fs9, 108(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fs10, 104(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fs11, 100(sp) # 4-byte Folded Spill
 ; VX-NEXT:    .cfi_offset ra, -4
 ; VX-NEXT:    .cfi_offset fs2, -8
 ; VX-NEXT:    .cfi_offset fs3, -12
@@ -486,75 +478,75 @@ define float @local_float4_spill(ptr addrspace(3) align 16 %p) {
 ; VX-NEXT:    .cfi_offset fs9, -36
 ; VX-NEXT:    .cfi_offset fs10, -40
 ; VX-NEXT:    .cfi_offset fs11, -44
-; VX-NEXT:    vx_flds.q fs4, 0(a0)
-; VX-NEXT:    vx_flds.q fs8, 16(a0)
-; VX-NEXT:    vx_flds.q fa2, 32(a0)
-; VX-NEXT:    fsw fa2, 16(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa3, 20(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa4, 24(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa5, 28(sp) # 4-byte Folded Spill
-; VX-NEXT:    vx_flds.q fa2, 48(a0)
-; VX-NEXT:    fsw fa2, 0(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa3, 4(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa4, 8(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa5, 12(sp) # 4-byte Folded Spill
-; VX-NEXT:    vx_flds.q fa2, 64(a0)
-; VX-NEXT:    fsw fa2, 48(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa3, 52(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa4, 56(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa5, 60(sp) # 4-byte Folded Spill
-; VX-NEXT:    vx_flds.q fa2, 80(a0)
-; VX-NEXT:    fsw fa2, 32(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa3, 36(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa4, 40(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa5, 44(sp) # 4-byte Folded Spill
-; VX-NEXT:    vx_flds.q fa2, 96(a0)
-; VX-NEXT:    fsw fa2, 80(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa3, 84(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa4, 88(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa5, 92(sp) # 4-byte Folded Spill
-; VX-NEXT:    vx_flds.q fa2, 112(a0)
-; VX-NEXT:    fsw fa2, 64(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa3, 68(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa4, 72(sp) # 4-byte Folded Spill
-; VX-NEXT:    fsw fa5, 76(sp) # 4-byte Folded Spill
+; VX-NEXT:    vx_flw.q fs4, 0(a0)
+; VX-NEXT:    vx_flw.q fs8, 16(a0)
+; VX-NEXT:    vx_flw.q fa2, 32(a0)
+; VX-NEXT:    fsw fa2, 20(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa3, 24(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa4, 28(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa5, 32(sp) # 4-byte Folded Spill
+; VX-NEXT:    vx_flw.q fa2, 48(a0)
+; VX-NEXT:    fsw fa2, 4(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa3, 8(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa4, 12(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa5, 16(sp) # 4-byte Folded Spill
+; VX-NEXT:    vx_flw.q fa2, 64(a0)
+; VX-NEXT:    fsw fa2, 52(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa3, 56(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa4, 60(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa5, 64(sp) # 4-byte Folded Spill
+; VX-NEXT:    vx_flw.q fa2, 80(a0)
+; VX-NEXT:    fsw fa2, 36(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa3, 40(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa4, 44(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa5, 48(sp) # 4-byte Folded Spill
+; VX-NEXT:    vx_flw.q fa2, 96(a0)
+; VX-NEXT:    fsw fa2, 84(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa3, 88(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa4, 92(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa5, 96(sp) # 4-byte Folded Spill
+; VX-NEXT:    vx_flw.q fa2, 112(a0)
+; VX-NEXT:    fsw fa2, 68(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa3, 72(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa4, 76(sp) # 4-byte Folded Spill
+; VX-NEXT:    fsw fa5, 80(sp) # 4-byte Folded Spill
 ; VX-NEXT:    call clobber
 ; VX-NEXT:    fadd.s fa5, fs7, fs11
 ; VX-NEXT:    fadd.s fa4, fs6, fs10
 ; VX-NEXT:    fadd.s fa3, fs5, fs9
 ; VX-NEXT:    fadd.s fa2, fs4, fs8
-; VX-NEXT:    flw ft8, 16(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw ft9, 20(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw ft10, 24(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw ft11, 28(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw ft4, 0(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw ft5, 4(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw ft6, 8(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw ft7, 12(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft8, 20(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft9, 24(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft10, 28(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft11, 32(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft4, 4(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft5, 8(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft6, 12(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft7, 16(sp) # 4-byte Folded Reload
 ; VX-NEXT:    fadd.s fa1, ft11, ft7
 ; VX-NEXT:    fadd.s fa0, ft10, ft6
 ; VX-NEXT:    fadd.s ft0, ft9, ft5
 ; VX-NEXT:    fadd.s ft1, ft8, ft4
-; VX-NEXT:    flw ft8, 48(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw ft9, 52(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw ft10, 56(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw ft11, 60(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fa6, 32(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fa7, 36(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs2, 40(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs3, 44(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft8, 52(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft9, 56(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft10, 60(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft11, 64(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fa6, 36(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fa7, 40(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs2, 44(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs3, 48(sp) # 4-byte Folded Reload
 ; VX-NEXT:    fadd.s ft2, ft11, fs3
 ; VX-NEXT:    fadd.s ft3, ft10, fs2
 ; VX-NEXT:    fadd.s ft4, ft9, fa7
 ; VX-NEXT:    fadd.s ft5, ft8, fa6
-; VX-NEXT:    flw ft8, 80(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw ft9, 84(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw ft10, 88(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw ft11, 92(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs4, 64(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs5, 68(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs6, 72(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs7, 76(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft8, 84(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft9, 88(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft10, 92(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw ft11, 96(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs4, 68(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs5, 72(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs6, 76(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs7, 80(sp) # 4-byte Folded Reload
 ; VX-NEXT:    fadd.s ft6, ft11, fs7
 ; VX-NEXT:    fadd.s ft7, ft10, fs6
 ; VX-NEXT:    fadd.s fa6, ft9, fs5
@@ -574,17 +566,17 @@ define float @local_float4_spill(ptr addrspace(3) align 16 %p) {
 ; VX-NEXT:    fsub.s fa4, fa4, fa2
 ; VX-NEXT:    fadd.s fa5, fa4, fa5
 ; VX-NEXT:    fadd.s fa0, fa3, fa5
-; VX-NEXT:    lw ra, 156(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs2, 152(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs3, 148(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs4, 144(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs5, 140(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs6, 136(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs7, 132(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs8, 128(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs9, 124(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs10, 120(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs11, 116(sp) # 4-byte Folded Reload
+; VX-NEXT:    lw ra, 140(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs2, 136(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs3, 132(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs4, 128(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs5, 124(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs6, 120(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs7, 116(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs8, 112(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs9, 108(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs10, 104(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs11, 100(sp) # 4-byte Folded Reload
 ; VX-NEXT:    .cfi_restore ra
 ; VX-NEXT:    .cfi_restore fs2
 ; VX-NEXT:    .cfi_restore fs3
@@ -596,7 +588,7 @@ define float @local_float4_spill(ptr addrspace(3) align 16 %p) {
 ; VX-NEXT:    .cfi_restore fs9
 ; VX-NEXT:    .cfi_restore fs10
 ; VX-NEXT:    .cfi_restore fs11
-; VX-NEXT:    addi sp, sp, 160
+; VX-NEXT:    addi sp, sp, 144
 ; VX-NEXT:    .cfi_def_cfa_offset 0
 ; VX-NEXT:    ret
 ;
@@ -805,7 +797,7 @@ define float @local_float4_loop(ptr addrspace(3) align 16 %p, i32 %n) {
 ; VX-NEXT:    csrr a3, tmask
 ; VX-NEXT:  .LBB15_1: # %loop
 ; VX-NEXT:    # =>This Inner Loop Header: Depth=1
-; VX-NEXT:    vx_flds.q fa2, 32(a0)
+; VX-NEXT:    vx_flw.q fa2, 32(a0)
 ; VX-NEXT:    addi a2, a2, 1
 ; VX-NEXT:    sltu a4, a2, a1
 ; VX-NEXT:    fmul.s fa5, fa2, fa5
@@ -895,10 +887,7 @@ define float @local_global_v4f32(i32 %i) {
 ; VX-NEXT:    lui a1, %hi(lds)
 ; VX-NEXT:    addi a1, a1, %lo(lds)
 ; VX-NEXT:    add a0, a1, a0
-; VX-NEXT:    flw fa2, 0(a0)
-; VX-NEXT:    flw fa3, 4(a0)
-; VX-NEXT:    flw fa4, 8(a0)
-; VX-NEXT:    flw fa5, 12(a0)
+; VX-NEXT:    vx_flw.q fa2, 0(a0)
 ; VX-NEXT:    fadd.s fa3, fa2, fa3
 ; VX-NEXT:    fmul.s fa5, fa4, fa5
 ; VX-NEXT:    fsub.s fa0, fa3, fa5

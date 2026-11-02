@@ -5,7 +5,7 @@
 ; RUN:   -passes=load-store-vectorizer -S < %s | FileCheck %s --check-prefix=NOWIDE
 
 ; With XVortex on RV32 with FLEN 32, the LoadStoreVectorizer merges aligned
-; local float loads into the <4 x float> / <2 x float> loads vx_flds.q/.d
+; local float loads into the <4 x float> / <2 x float> loads vx_flw.q/.d
 ; read. It leaves stores, integer loads, other address spaces and chains
 ; without proven alignment alone, and does nothing without the wide loads.
 

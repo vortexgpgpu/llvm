@@ -2784,6 +2784,44 @@ bool RISCVDAGToDAGISel::SelectAddrRegImm(SDValue Addr, SDValue &Base,
   return true;
 }
 
+/// Base and offset of an XVortex wide access (vx_flw.d/.q, vx_fsw.d/.q), whose
+/// offset must be a multiple of OffsetAlign. The rest of a constant offset is
+/// added to the base, where accesses at the same distance from an aligned
+/// offset can share it.
+bool RISCVDAGToDAGISel::selectAddrRegImmVXWide(SDValue Addr, SDValue &Base,
+                                               SDValue &Offset,
+                                               unsigned OffsetAlign) {
+  if (SelectAddrFrameIndex(Addr, Base, Offset))
+    return true;
+
+  SDLoc DL(Addr);
+  MVT VT = Addr.getSimpleValueType();
+
+  if (CurDAG->isBaseWithConstantOffset(Addr)) {
+    int64_t CVal = cast<ConstantSDNode>(Addr.getOperand(1))->getSExtValue();
+    int64_t Lo = CVal & ~int64_t(OffsetAlign - 1);
+    int64_t Rem = CVal - Lo;
+    if (isInt<12>(Lo)) {
+      Base = Addr.getOperand(0);
+      // A stack slot's own offset is a multiple only once frame elimination
+      // has moved the rest into the base.
+      if (auto *FIN = dyn_cast<FrameIndexSDNode>(Base))
+        Base = CurDAG->getTargetFrameIndex(FIN->getIndex(), VT);
+      if (Rem)
+        Base = SDValue(CurDAG->getMachineNode(
+                           RISCV::ADDI, DL, VT, Base,
+                           CurDAG->getSignedTargetConstant(Rem, DL, VT)),
+                       0);
+      Offset = CurDAG->getSignedTargetConstant(Lo, DL, VT);
+      return true;
+    }
+  }
+
+  Base = Addr;
+  Offset = CurDAG->getTargetConstant(0, DL, VT);
+  return true;
+}
+
 /// Similar to SelectAddrRegImm, except that the least significant 5 bits of
 /// Offset should be all zeros.
 bool RISCVDAGToDAGISel::SelectAddrRegImmLsb00000(SDValue Addr, SDValue &Base,

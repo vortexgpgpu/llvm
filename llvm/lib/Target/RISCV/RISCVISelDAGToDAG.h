@@ -52,6 +52,14 @@ public:
     return SelectAddrRegImm(Addr, Base, Offset, true);
   }
   bool SelectAddrRegImmLsb00000(SDValue Addr, SDValue &Base, SDValue &Offset);
+  bool selectAddrRegImmVXWide(SDValue Addr, SDValue &Base, SDValue &Offset,
+                              unsigned OffsetAlign);
+  bool SelectAddrRegImmLsb000(SDValue Addr, SDValue &Base, SDValue &Offset) {
+    return selectAddrRegImmVXWide(Addr, Base, Offset, 8);
+  }
+  bool SelectAddrRegImmLsb0000(SDValue Addr, SDValue &Base, SDValue &Offset) {
+    return selectAddrRegImmVXWide(Addr, Base, Offset, 16);
+  }
 
   bool SelectAddrRegRegScale(SDValue Addr, unsigned MaxShiftAmount,
                              SDValue &Base, SDValue &Index, SDValue &Scale);

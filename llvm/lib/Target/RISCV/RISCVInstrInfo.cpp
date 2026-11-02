@@ -627,6 +627,19 @@ void RISCVInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   llvm_unreachable("Impossible reg-to-reg copy");
 }
 
+unsigned RISCV::getVXWideOffsetAlign(unsigned Opcode) {
+  switch (Opcode) {
+  case RISCV::VX_FLW_D:
+  case RISCV::VX_FSW_D:
+    return 8;
+  case RISCV::VX_FLW_Q:
+  case RISCV::VX_FSW_Q:
+    return 16;
+  default:
+    return 0;
+  }
+}
+
 std::optional<RISCV::VXGroupSpillInfo>
 RISCV::getVXGroupSpillInfo(unsigned Opcode, bool IsRV64) {
   static const unsigned GPRG4Subs[] = {
@@ -2697,6 +2710,12 @@ bool RISCVInstrInfo::verifyInstruction(const MachineInstr &MI,
         case RISCVOp::OPERAND_SIMM12_LSB00000:
           Ok = isShiftedInt<7, 5>(Imm);
           break;
+        case RISCVOp::OPERAND_SIMM12_LSB000:
+          Ok = isShiftedInt<9, 3>(Imm);
+          break;
+        case RISCVOp::OPERAND_SIMM12_LSB0000:
+          Ok = isShiftedInt<8, 4>(Imm);
+          break;
         case RISCVOp::OPERAND_UIMMLOG2XLEN:
           Ok = STI.is64Bit() ? isUInt<6>(Imm) : isUInt<5>(Imm);
           break;
@@ -2857,8 +2876,10 @@ bool RISCVInstrInfo::canFoldIntoAddrMode(const MachineInstr &MemI, Register Reg,
   case RISCV::FSH:
   case RISCV::FSW:
   case RISCV::FSD:
-  case RISCV::VX_FLDS_D:
-  case RISCV::VX_FLDS_Q:
+  case RISCV::VX_FLW_D:
+  case RISCV::VX_FLW_Q:
+  case RISCV::VX_FSW_D:
+  case RISCV::VX_FSW_Q:
     break;
   }
 
@@ -2876,6 +2897,9 @@ bool RISCVInstrInfo::canFoldIntoAddrMode(const MachineInstr &MemI, Register Reg,
     NewOffset = SignExtend64<32>(NewOffset);
 
   if (!isInt<12>(NewOffset))
+    return false;
+  if (unsigned OffsetAlign = RISCV::getVXWideOffsetAlign(MemI.getOpcode());
+      OffsetAlign && NewOffset % OffsetAlign)
     return false;
 
   AM.BaseReg = AddrI.getOperand(1).getReg();

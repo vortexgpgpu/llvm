@@ -68,26 +68,14 @@ define i32 @arg_v4i32(<4 x i32> %v) {
 define <4 x float> @ret_v4f32(ptr %p) {
 ; ILP32F-LABEL: ret_v4f32:
 ; ILP32F:       # %bb.0:
-; ILP32F-NEXT:    flw fa2, 0(a1)
-; ILP32F-NEXT:    flw fa3, 4(a1)
-; ILP32F-NEXT:    flw fa4, 8(a1)
-; ILP32F-NEXT:    flw fa5, 12(a1)
-; ILP32F-NEXT:    fsw fa2, 0(a0)
-; ILP32F-NEXT:    fsw fa3, 4(a0)
-; ILP32F-NEXT:    fsw fa4, 8(a0)
-; ILP32F-NEXT:    fsw fa5, 12(a0)
+; ILP32F-NEXT:    vx_flw.q fa2, 0(a1)
+; ILP32F-NEXT:    vx_fsw.q fa2, 0(a0)
 ; ILP32F-NEXT:    ret
 ;
 ; ILP32-LABEL: ret_v4f32:
 ; ILP32:       # %bb.0:
-; ILP32-NEXT:    flw fs0, 0(a1)
-; ILP32-NEXT:    flw fs1, 4(a1)
-; ILP32-NEXT:    flw fa0, 8(a1)
-; ILP32-NEXT:    flw fa1, 12(a1)
-; ILP32-NEXT:    fsw fs0, 0(a0)
-; ILP32-NEXT:    fsw fs1, 4(a0)
-; ILP32-NEXT:    fsw fa0, 8(a0)
-; ILP32-NEXT:    fsw fa1, 12(a0)
+; ILP32-NEXT:    vx_flw.q fs0, 0(a1)
+; ILP32-NEXT:    vx_fsw.q fs0, 0(a0)
 ; ILP32-NEXT:    ret
   %v = load <4 x float>, ptr %p, align 16
   ret <4 x float> %v
@@ -96,14 +84,12 @@ define <4 x float> @ret_v4f32(ptr %p) {
 define <2 x float> @ret_v2f32(ptr %p) {
 ; ILP32F-LABEL: ret_v2f32:
 ; ILP32F:       # %bb.0:
-; ILP32F-NEXT:    flw fa0, 0(a0)
-; ILP32F-NEXT:    flw fa1, 4(a0)
+; ILP32F-NEXT:    vx_flw.d fa0, 0(a0)
 ; ILP32F-NEXT:    ret
 ;
 ; ILP32-LABEL: ret_v2f32:
 ; ILP32:       # %bb.0:
-; ILP32-NEXT:    flw fa0, 0(a0)
-; ILP32-NEXT:    flw fa1, 4(a0)
+; ILP32-NEXT:    vx_flw.d fa0, 0(a0)
 ; ILP32-NEXT:    fmv.x.w a0, fa0
 ; ILP32-NEXT:    fmv.x.w a1, fa1
 ; ILP32-NEXT:    ret
@@ -152,22 +138,16 @@ define void @call_v4f32(ptr %p, ptr %q) {
 ; ILP32F-NEXT:    .cfi_offset ra, -4
 ; ILP32F-NEXT:    .cfi_offset s0, -8
 ; ILP32F-NEXT:    mv s0, a0
-; ILP32F-NEXT:    flw fa0, 0(a0)
-; ILP32F-NEXT:    flw fa1, 4(a0)
-; ILP32F-NEXT:    flw fa2, 8(a0)
-; ILP32F-NEXT:    flw fa3, 12(a0)
-; ILP32F-NEXT:    flw fa4, 0(a1)
-; ILP32F-NEXT:    flw fa5, 4(a1)
+; ILP32F-NEXT:    vx_flw.q ft8, 0(a0)
+; ILP32F-NEXT:    vx_flw.d fa4, 0(a1)
 ; ILP32F-NEXT:    mv a0, sp
+; ILP32F-NEXT:    fmv.s fa0, ft8
+; ILP32F-NEXT:    fmv.s fa1, ft9
+; ILP32F-NEXT:    fmv.s fa2, ft10
+; ILP32F-NEXT:    fmv.s fa3, ft11
 ; ILP32F-NEXT:    call callee_v4f32
-; ILP32F-NEXT:    flw fa2, 0(sp)
-; ILP32F-NEXT:    flw fa3, 4(sp)
-; ILP32F-NEXT:    flw fa4, 8(sp)
-; ILP32F-NEXT:    flw fa5, 12(sp)
-; ILP32F-NEXT:    fsw fa2, 0(s0)
-; ILP32F-NEXT:    fsw fa3, 4(s0)
-; ILP32F-NEXT:    fsw fa4, 8(s0)
-; ILP32F-NEXT:    fsw fa5, 12(s0)
+; ILP32F-NEXT:    vx_flw.q fa2, 0(sp)
+; ILP32F-NEXT:    vx_fsw.q fa2, 0(s0)
 ; ILP32F-NEXT:    lw ra, 28(sp) # 4-byte Folded Reload
 ; ILP32F-NEXT:    lw s0, 24(sp) # 4-byte Folded Reload
 ; ILP32F-NEXT:    .cfi_restore ra
@@ -185,12 +165,8 @@ define void @call_v4f32(ptr %p, ptr %q) {
 ; ILP32-NEXT:    .cfi_offset ra, -4
 ; ILP32-NEXT:    .cfi_offset s0, -8
 ; ILP32-NEXT:    mv s0, a0
-; ILP32-NEXT:    flw fs0, 0(a0)
-; ILP32-NEXT:    flw fs1, 4(a0)
-; ILP32-NEXT:    flw fa0, 8(a0)
-; ILP32-NEXT:    flw fa1, 12(a0)
-; ILP32-NEXT:    flw fa2, 0(a1)
-; ILP32-NEXT:    flw fa3, 4(a1)
+; ILP32-NEXT:    vx_flw.q fs0, 0(a0)
+; ILP32-NEXT:    vx_flw.d fa2, 0(a1)
 ; ILP32-NEXT:    fmv.x.w a1, fs0
 ; ILP32-NEXT:    fmv.x.w a2, fs1
 ; ILP32-NEXT:    fmv.x.w a3, fa0
@@ -199,14 +175,8 @@ define void @call_v4f32(ptr %p, ptr %q) {
 ; ILP32-NEXT:    fmv.x.w a6, fa3
 ; ILP32-NEXT:    mv a0, sp
 ; ILP32-NEXT:    call callee_v4f32
-; ILP32-NEXT:    flw fs0, 0(sp)
-; ILP32-NEXT:    flw fs1, 4(sp)
-; ILP32-NEXT:    flw fa0, 8(sp)
-; ILP32-NEXT:    flw fa1, 12(sp)
-; ILP32-NEXT:    fsw fs0, 0(s0)
-; ILP32-NEXT:    fsw fs1, 4(s0)
-; ILP32-NEXT:    fsw fa0, 8(s0)
-; ILP32-NEXT:    fsw fa1, 12(s0)
+; ILP32-NEXT:    vx_flw.q fs0, 0(sp)
+; ILP32-NEXT:    vx_fsw.q fs0, 0(s0)
 ; ILP32-NEXT:    lw ra, 28(sp) # 4-byte Folded Reload
 ; ILP32-NEXT:    lw s0, 24(sp) # 4-byte Folded Reload
 ; ILP32-NEXT:    .cfi_restore ra
