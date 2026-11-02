@@ -10,7 +10,6 @@
 #include "MCTargetDesc/RISCVMatInt.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/CodeGen/BasicTTIImpl.h"
 #include "llvm/CodeGen/CostTable.h"
 #include "llvm/CodeGen/TargetLowering.h"
@@ -2648,33 +2647,6 @@ RISCVTTIImpl::enableMemCmpExpansion(bool OptSize, bool IsZeroCmp) const {
     Options.AllowedTailExpansions = {3};
   }
   return Options;
-}
-
-// A generic pointer loaded from a Vortex kernel's argument block is global:
-// the host fills the block before launch and can only hand the kernel global
-// memory (AMDGPU's kernarg rule). The block is the memory a kernel entry's
-// pointer argument points to. The argument must be readonly, so the kernel
-// does not store through it; like AMDGPU, this assumes the kernel does not
-// reach the block another way to store a local pointer into it.
-unsigned RISCVTTIImpl::getAssumedAddrSpace(const Value *V) const {
-  if (!ST->hasVendorXVortex())
-    return ~0u;
-  const auto *LD = dyn_cast<LoadInst>(V);
-  if (!LD || !LD->getType()->isPointerTy() ||
-      LD->getType()->getPointerAddressSpace() != VortexAS::Generic)
-    return ~0u;
-  const auto *Arg =
-      dyn_cast<Argument>(getUnderlyingObject(LD->getPointerOperand()));
-  if (!Arg || !Arg->onlyReadsMemory() ||
-      !isVortexKernelEntry(*Arg->getParent()))
-    return ~0u;
-  return VortexAS::Global;
-}
-
-bool llvm::isVortexLocalWindowPointer(const Value *Ptr) {
-  SmallVector<const Value *, 4> Objs;
-  getUnderlyingObjects(Ptr, Objs, /*LI=*/nullptr, /*MaxLookup=*/0);
-  return none_of(Objs, [](const Value *O) { return isa<GlobalValue>(O); });
 }
 
 // XVortex: v2f32/v4f32 accesses with 4-byte alignment are one vx_flw.d/.q or

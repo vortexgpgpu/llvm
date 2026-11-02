@@ -332,35 +332,6 @@ bool RISCVTargetInfo::hasFeature(StringRef Feature) const {
   return ISAInfo->hasExtension(Feature);
 }
 
-// Vortex GPU address spaces: 0 generic (flat), 1 global, 3 local. Constant
-// data lives in global memory and private data on the generic stack.
-static const LangASMap VortexAddrSpaceMap = {
-    0, // Default
-    1, // opencl_global
-    3, // opencl_local
-    1, // opencl_constant
-    0, // opencl_private
-    0, // opencl_generic
-    1, // opencl_global_device
-    1, // opencl_global_host
-    1, // cuda_device
-    1, // cuda_constant
-    3, // cuda_shared
-    1, // sycl_global
-    1, // sycl_global_device
-    1, // sycl_global_host
-    3, // sycl_local
-    0, // sycl_private
-    0, // ptr32_sptr
-    0, // ptr32_uptr
-    0, // ptr64
-    0, // hlsl_groupshared
-    0, // hlsl_constant
-    // Wasm address space values for this target are dummy values,
-    // as it is only enabled for Wasm targets.
-    20, // wasm_funcref
-};
-
 /// Perform initialization based on the user configured set of features.
 bool RISCVTargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
                                            DiagnosticsEngine &Diags) {
@@ -383,11 +354,6 @@ bool RISCVTargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
 
   if (ISAInfo->hasExtension("zfh") || ISAInfo->hasExtension("zhinx"))
     HasLegalHalfType = true;
-
-  // The Vortex GPU distinguishes global and local memory, so its OpenCL/CUDA
-  // address spaces map to distinct LLVM address spaces instead of all to 0.
-  if (ISAInfo->hasExtension("xvortex"))
-    AddrSpaceMap = &VortexAddrSpaceMap;
 
   FastScalarUnalignedAccess =
       llvm::is_contained(Features, "+unaligned-scalar-mem");

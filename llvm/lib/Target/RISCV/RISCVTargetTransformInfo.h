@@ -104,13 +104,6 @@ public:
   bool isAlwaysUniform(const Value *V);
   bool hasBranchDivergence(const Function *F);
 
-  // Vortex address spaces: generic pointers are flat; InferAddressSpaces
-  // narrows them to global (1) or local (3).
-  unsigned getFlatAddressSpace() const {
-    return ST->hasVendorXVortex() ? VortexAS::Generic : ~0u;
-  }
-  unsigned getAssumedAddrSpace(const Value *V) const;
-
   // XVortex: the LoadStoreVectorizer merges word-aligned float chains of 2 or
   // 4 words, in any address space, into vx_flw.d/.q and vx_fsw.d/.q.
   bool useVortexWideLSV() const;
