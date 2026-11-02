@@ -430,7 +430,8 @@ public:
     if (TM.getOptLevel() != CodeGenOptLevel::None) {
       substitutePass(&PostRASchedulerID, &PostMachineSchedulerID);
       // On the scheduled code, which fixes the pressure the allocator sees.
-      insertPass(&MachineSchedulerID, &RISCVVortexWideLoadSplitID);
+      if (TM.hasVendorXVortex())
+        insertPass(&MachineSchedulerID, &RISCVVortexWideLoadSplitID);
     }
     setEnableSinkAndFold(EnableSinkFold);
     EnableLoopTermFold = true;

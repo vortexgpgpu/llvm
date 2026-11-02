@@ -789,3 +789,45 @@ define float @load_mixed_int_float(ptr addrspace(3) align 16 %p) {
   %r = fsub float %ab, %cd
   ret float %r
 }
+
+; Vortex barrier and thread-mask intrinsics are IntrNoMem with
+; IntrHasSideEffects, which TableGen turns into unknown memory effects, so no
+; chain merges across them.
+declare void @llvm.riscv.vx.bar.i32(i32, i32)
+declare void @llvm.riscv.vx.tmc.i32(i32)
+
+define float @across_vortex_intrinsics(ptr addrspace(3) %p) {
+; VX-LABEL: define float @across_vortex_intrinsics(
+; VX-SAME: ptr addrspace(3) [[P:%.*]]) #[[ATTR0]] {
+; VX-NEXT:    [[P1:%.*]] = getelementptr inbounds float, ptr addrspace(3) [[P]], i32 1
+; VX-NEXT:    store float 1.000000e+00, ptr addrspace(3) [[P]], align 4
+; VX-NEXT:    call void @llvm.riscv.vx.bar.i32(i32 0, i32 4)
+; VX-NEXT:    store float 2.000000e+00, ptr addrspace(3) [[P1]], align 4
+; VX-NEXT:    [[A:%.*]] = load float, ptr addrspace(3) [[P]], align 4
+; VX-NEXT:    call void @llvm.riscv.vx.tmc.i32(i32 1)
+; VX-NEXT:    [[B:%.*]] = load float, ptr addrspace(3) [[P1]], align 4
+; VX-NEXT:    [[S:%.*]] = fadd float [[A]], [[B]]
+; VX-NEXT:    ret float [[S]]
+;
+; SCALAR-LABEL: define float @across_vortex_intrinsics(
+; SCALAR-SAME: ptr addrspace(3) [[P:%.*]]) #[[ATTR0]] {
+; SCALAR-NEXT:    [[P1:%.*]] = getelementptr inbounds float, ptr addrspace(3) [[P]], i32 1
+; SCALAR-NEXT:    store float 1.000000e+00, ptr addrspace(3) [[P]], align 4
+; SCALAR-NEXT:    call void @llvm.riscv.vx.bar.i32(i32 0, i32 4)
+; SCALAR-NEXT:    store float 2.000000e+00, ptr addrspace(3) [[P1]], align 4
+; SCALAR-NEXT:    [[A:%.*]] = load float, ptr addrspace(3) [[P]], align 4
+; SCALAR-NEXT:    call void @llvm.riscv.vx.tmc.i32(i32 1)
+; SCALAR-NEXT:    [[B:%.*]] = load float, ptr addrspace(3) [[P1]], align 4
+; SCALAR-NEXT:    [[S:%.*]] = fadd float [[A]], [[B]]
+; SCALAR-NEXT:    ret float [[S]]
+;
+  %p1 = getelementptr inbounds float, ptr addrspace(3) %p, i32 1
+  store float 1.0, ptr addrspace(3) %p, align 4
+  call void @llvm.riscv.vx.bar.i32(i32 0, i32 4)
+  store float 2.0, ptr addrspace(3) %p1, align 4
+  %a = load float, ptr addrspace(3) %p, align 4
+  call void @llvm.riscv.vx.tmc.i32(i32 1)
+  %b = load float, ptr addrspace(3) %p1, align 4
+  %s = fadd float %a, %b
+  ret float %s
+}
