@@ -10,6 +10,7 @@
 #define LLVM_TRANSFORMS_VECTORIZE_LOADSTOREVECTORIZER_H
 
 #include "llvm/IR/PassManager.h"
+#include <functional>
 
 namespace llvm {
 class Pass;
@@ -20,8 +21,10 @@ public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
 
-/// Create a legacy pass manager instance of the LoadStoreVectorizer pass
-Pass *createLoadStoreVectorizerPass();
+/// Create a legacy pass manager instance of the LoadStoreVectorizer pass. If
+/// \p Ftor is given, the pass skips the functions for which it returns false.
+Pass *createLoadStoreVectorizerPass(
+    std::function<bool(const Function &)> Ftor = nullptr);
 
 }
 

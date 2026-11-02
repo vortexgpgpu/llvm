@@ -3,6 +3,8 @@
 ; RUN: llc -mtriple=riscv32 -mattr=+m,+f,+xvortex -verify-machineinstrs \
 ; RUN:   -riscv-vortex-split-wide-loads=false < %s \
 ; RUN:   | FileCheck %s --check-prefix=NOSPLIT
+; RUN: llc -mtriple=riscv32 -mattr=+m,+f -verify-machineinstrs < %s \
+; RUN:   | FileCheck %s
 
 ; A 4x4 register tile (sgemmx): 16 accumulators, and per k step one word of
 ; each A row and one row of B. The LoadStoreVectorizer merges each A row into
@@ -11,7 +13,9 @@
 ; pressure exceeds 32 and the allocator spills accumulators inside the loop.
 ; The scheduled pressure is over the register file, so the A quads that
 ; cause it are split back into flw at their reads, and the loop has no
-; spills. The B quads, read in consecutive instructions, stay wide.
+; spills. The B quads, read in consecutive instructions, stay wide. The
+; functions carry XVortex in their attributes, so the last run checks that
+; the vectorizer and the split follow the function's subtarget.
 
 ; CHECK-LABEL: mm4x4:
 ; CHECK:       .LBB0_1: # %loop
@@ -25,7 +29,7 @@
 ; NOSPLIT:       # 4-byte Folded Spill
 ; NOSPLIT:       # %exit
 
-define void @mm4x4(ptr addrspace(3) %As, ptr addrspace(3) %Bs, ptr addrspace(1) %C, i32 %n) {
+define void @mm4x4(ptr addrspace(3) %As, ptr addrspace(3) %Bs, ptr addrspace(1) %C, i32 %n) #0 {
 entry:
   br label %loop
 loop:
@@ -224,7 +228,7 @@ declare float @llvm.fmuladd.f32(float, float, float)
 ; CHECK-COUNT-8: vx_flw.q
 ; CHECK-NOT:     {{[[:space:]]}}flw{{[[:space:]]}}
 ; CHECK:         ret
-define float @dot16(ptr addrspace(3) %a, ptr addrspace(1) %b) {
+define float @dot16(ptr addrspace(3) %a, ptr addrspace(1) %b) #0 {
   %pa0 = getelementptr inbounds float, ptr addrspace(3) %a, i32 0
   %a0 = load float, ptr addrspace(3) %pa0, align 4
   %pb0 = getelementptr inbounds float, ptr addrspace(1) %b, i32 0
@@ -307,3 +311,5 @@ define float @dot16(ptr addrspace(3) %a, ptr addrspace(1) %b) {
   %s15 = call float @llvm.fmuladd.f32(float %a15, float %b15, float %s14)
   ret float %s15
 }
+
+attributes #0 = { "target-features"="+m,+f,+xvortex" }

@@ -57,9 +57,9 @@ static cl::opt<unsigned> RISCVMaxBuildIntsCost(
 
 static cl::opt<bool> VortexWideMerging(
     "riscv-vortex-wide-lsv",
-    cl::desc("Merge XVortex float accesses into vx_flw.d/.q and vx_fsw.d/.q "
-             "in the LoadStoreVectorizer and the DAG store merging (explicit "
-             "vector accesses use them either way)"),
+    cl::desc("Merge scalar XVortex float accesses into vx_flw.d/.q and "
+             "vx_fsw.d/.q in the LoadStoreVectorizer (DAG store merging never "
+             "builds them; explicit vector accesses use them either way)"),
     cl::init(true), cl::Hidden);
 
 bool RISCVSubtarget::useVortexWideMerging() const {

@@ -360,10 +360,6 @@ bool RISCVTargetMachine::isNoopAddrSpaceCast(unsigned SrcAS,
   return true;
 }
 
-bool RISCVTargetMachine::hasVendorXVortex() const {
-  return getMCSubtargetInfo()->hasFeature(RISCV::FeatureVendorXVortex);
-}
-
 namespace {
 
 class RVVRegisterRegAlloc : public RegisterRegAllocBase<RVVRegisterRegAlloc> {
@@ -430,8 +426,8 @@ public:
     if (TM.getOptLevel() != CodeGenOptLevel::None) {
       substitutePass(&PostRASchedulerID, &PostMachineSchedulerID);
       // On the scheduled code, which fixes the pressure the allocator sees.
-      if (TM.hasVendorXVortex())
-        insertPass(&MachineSchedulerID, &RISCVVortexWideLoadSplitID);
+      // A no-op in functions without the wide accesses.
+      insertPass(&MachineSchedulerID, &RISCVVortexWideLoadSplitID);
     }
     setEnableSinkAndFold(EnableSinkFold);
     EnableLoopTermFold = true;
@@ -546,12 +542,15 @@ void RISCVPassConfig::addIRPasses() {
   addPass(createRISCVZacasABIFixPass());
   addPass(createRISCVVortexKEntryPass());
 
-  if (getOptLevel() != CodeGenOptLevel::None &&
-      getTM<RISCVTargetMachine>().hasVendorXVortex()) {
+  if (getOptLevel() != CodeGenOptLevel::None) {
     // Merge word-aligned float loads and stores into the v2f32/v4f32
     // accesses that select vx_flw.d/.q and vx_fsw.d/.q; the TTI keeps every
-    // other access scalar.
-    addPass(createLoadStoreVectorizerPass());
+    // other access scalar. XVortex may come from function attributes only,
+    // so the vectorizer runs on the functions whose subtarget merges.
+    const RISCVTargetMachine &TM = getTM<RISCVTargetMachine>();
+    addPass(createLoadStoreVectorizerPass([&TM](const Function &F) {
+      return TM.getSubtarget<RISCVSubtarget>(F).useVortexWideMerging();
+    }));
   }
 
   if (getOptLevel() != CodeGenOptLevel::None) {

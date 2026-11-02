@@ -197,6 +197,36 @@ define float @global_float4(ptr addrspace(1) align 16 %p) {
   ret float %r
 }
 
+; XVortex from the function's attributes only: the NOVX run merges too.
+define float @attr_float4(ptr addrspace(1) align 16 %p) #0 {
+; VX-LABEL: attr_float4:
+; VX:       # %bb.0:
+; VX-NEXT:    vx_flw.q fa2, 0(a0)
+; VX-NEXT:    fadd.s fa3, fa2, fa3
+; VX-NEXT:    fmul.s fa5, fa4, fa5
+; VX-NEXT:    fsub.s fa0, fa3, fa5
+; VX-NEXT:    ret
+;
+; NOVX-LABEL: attr_float4:
+; NOVX:       # %bb.0:
+; NOVX-NEXT:    vx_flw.q fa2, 0(a0)
+; NOVX-NEXT:    fadd.s fa3, fa2, fa3
+; NOVX-NEXT:    fmul.s fa5, fa4, fa5
+; NOVX-NEXT:    fsub.s fa0, fa3, fa5
+; NOVX-NEXT:    ret
+  %p1 = getelementptr inbounds float, ptr addrspace(1) %p, i32 1
+  %p2 = getelementptr inbounds float, ptr addrspace(1) %p, i32 2
+  %p3 = getelementptr inbounds float, ptr addrspace(1) %p, i32 3
+  %a = load float, ptr addrspace(1) %p, align 16
+  %b = load float, ptr addrspace(1) %p1, align 4
+  %c = load float, ptr addrspace(1) %p2, align 8
+  %d = load float, ptr addrspace(1) %p3, align 4
+  %ab = fadd float %a, %b
+  %cd = fmul float %c, %d
+  %r = fsub float %ab, %cd
+  ret float %r
+}
+
 define float @generic_float4(ptr align 16 %p) {
 ; VX-LABEL: generic_float4:
 ; VX:       # %bb.0:
@@ -788,7 +818,7 @@ define float @local_float4_loop(ptr addrspace(3) align 16 %p, i32 %n) {
 ; VX-NEXT:    li a2, 0
 ; VX-NEXT:    fmv.w.x fa0, zero
 ; VX-NEXT:    csrr a3, tmask
-; VX-NEXT:  .LBB15_1: # %loop
+; VX-NEXT:  .LBB16_1: # %loop
 ; VX-NEXT:    # =>This Inner Loop Header: Depth=1
 ; VX-NEXT:    vx_flw.q fa2, 32(a0)
 ; VX-NEXT:    addi a2, a2, 1
@@ -796,7 +826,7 @@ define float @local_float4_loop(ptr addrspace(3) align 16 %p, i32 %n) {
 ; VX-NEXT:    fmul.s fa5, fa2, fa5
 ; VX-NEXT:    fadd.s fa0, fa0, fa5
 ; VX-NEXT:    vx_pred a4, a3
-; VX-NEXT:    bnez a4, .LBB15_1
+; VX-NEXT:    bnez a4, .LBB16_1
 ; VX-NEXT:  # %bb.2: # %exit
 ; VX-NEXT:    ret
 ;
@@ -807,11 +837,11 @@ define float @local_float4_loop(ptr addrspace(3) align 16 %p, i32 %n) {
 ; NOVX-NEXT:    flw fa4, 44(a0)
 ; NOVX-NEXT:    fmv.w.x fa0, zero
 ; NOVX-NEXT:    fmul.s fa5, fa5, fa4
-; NOVX-NEXT:  .LBB15_1: # %loop
+; NOVX-NEXT:  .LBB16_1: # %loop
 ; NOVX-NEXT:    # =>This Inner Loop Header: Depth=1
 ; NOVX-NEXT:    addi a2, a2, 1
 ; NOVX-NEXT:    fadd.s fa0, fa0, fa5
-; NOVX-NEXT:    bltu a2, a1, .LBB15_1
+; NOVX-NEXT:    bltu a2, a1, .LBB16_1
 ; NOVX-NEXT:  # %bb.2: # %exit
 ; NOVX-NEXT:    ret
 entry:
@@ -1006,3 +1036,5 @@ define void @copy_global_to_local(ptr addrspace(1) %src, ptr addrspace(3) %dst) 
   store float %d, ptr addrspace(3) %d3, align 4
   ret void
 }
+
+attributes #0 = { "target-features"="+f,+xvortex" }

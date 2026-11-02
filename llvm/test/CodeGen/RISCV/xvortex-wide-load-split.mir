@@ -7,10 +7,11 @@
 # reads word k at the base offset plus 4k into the register its reads use,
 # just before the first read when no store, call, fence, ordered access or
 # redefinition of the base lies in between, and at the quad's place
-# otherwise; a word that is not read is not loaded. A base killed before a
-# word's first read loses the kill flag. A debug value of a word follows the
-# word's register only after its load. A volatile quad, and a quad read
-# before its def in the block (its value live into the loop), stay wide.
+# otherwise; a word that is not read is not loaded. A word's register takes
+# the class its readers require (fpr32c for C_FSW). A debug value of a word
+# follows the word's register only after its load. A volatile quad, and a
+# quad read before its def in the block (its value live into the loop), stay
+# wide.
 
 ---
 name: split
@@ -68,6 +69,94 @@ body: |
     %w2:fpr32 = FSGNJ_S %q.sub_fpr32_g4_2, %w1
     %w3:fpr32 = FSGNJ_S %q.sub_fpr32_g4_3, %w2
     FSW %w3, %g, 0 :: (store (s32))
+    %s1:fpr32 = FSGNJ_S %v0, %v1
+    %s2:fpr32 = FSGNJ_S %s1, %v2
+    %s3:fpr32 = FSGNJ_S %s2, %v3
+    %s4:fpr32 = FSGNJ_S %s3, %v4
+    %s5:fpr32 = FSGNJ_S %s4, %v5
+    %s6:fpr32 = FSGNJ_S %s5, %v6
+    %s7:fpr32 = FSGNJ_S %s6, %v7
+    %s8:fpr32 = FSGNJ_S %s7, %v8
+    %s9:fpr32 = FSGNJ_S %s8, %v9
+    %s10:fpr32 = FSGNJ_S %s9, %v10
+    %s11:fpr32 = FSGNJ_S %s10, %v11
+    %s12:fpr32 = FSGNJ_S %s11, %v12
+    %s13:fpr32 = FSGNJ_S %s12, %v13
+    %s14:fpr32 = FSGNJ_S %s13, %v14
+    %s15:fpr32 = FSGNJ_S %s14, %v15
+    %s16:fpr32 = FSGNJ_S %s15, %v16
+    %s17:fpr32 = FSGNJ_S %s16, %v17
+    %s18:fpr32 = FSGNJ_S %s17, %v18
+    %s19:fpr32 = FSGNJ_S %s18, %v19
+    %s20:fpr32 = FSGNJ_S %s19, %v20
+    %s21:fpr32 = FSGNJ_S %s20, %v21
+    %s22:fpr32 = FSGNJ_S %s21, %v22
+    %s23:fpr32 = FSGNJ_S %s22, %v23
+    %s24:fpr32 = FSGNJ_S %s23, %v24
+    %s25:fpr32 = FSGNJ_S %s24, %v25
+    %s26:fpr32 = FSGNJ_S %s25, %v26
+    %s27:fpr32 = FSGNJ_S %s26, %v27
+    %s28:fpr32 = FSGNJ_S %s27, %v28
+    $f10_f = COPY %s28
+    PseudoRET implicit $f10_f
+...
+---
+name: word_class
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x10, $x11, $x12
+
+    ; CHECK-LABEL: name: word_class
+    ; CHECK: [[FLW:%[0-9]+]]:fpr32c = FLW %b, 44 :: (load (s32) from unknown-address + 12)
+    ; CHECK-NEXT: [[FLW1:%[0-9]+]]:fpr32 = FLW %b, 32 :: (load (s32))
+    ; CHECK-NEXT: %w0:fpr32 = FSGNJ_S [[FLW1]], [[FLW1]]
+    ; CHECK-NEXT: [[FLW2:%[0-9]+]]:fpr32 = FLW %b, 36 :: (load (s32) from unknown-address + 4)
+    ; CHECK-NEXT: %w1:fpr32 = FSGNJ_S [[FLW2]], %w0
+    ; CHECK-NEXT: [[FLW3:%[0-9]+]]:fpr32 = FLW %b, 40 :: (load (s32) from unknown-address + 8)
+    ; CHECK-NEXT: %w2:fpr32 = FSGNJ_S [[FLW3]], %w1
+    ; CHECK-NEXT: FSW %w2, %g, 0 :: (store (s32))
+    ; CHECK-NEXT: C_FSW [[FLW]], %gc, 4 :: (store (s32))
+    %b:gpr = COPY $x10
+    %f:gpr = COPY $x11
+    %g:gpr = COPY $x12
+    %c:gprjalr = COPY $x12
+    %gc:gprc = COPY $x12
+    %v0:fpr32 = FLW %f, 0 :: (load (s32))
+    %v1:fpr32 = FLW %f, 4 :: (load (s32))
+    %v2:fpr32 = FLW %f, 8 :: (load (s32))
+    %v3:fpr32 = FLW %f, 12 :: (load (s32))
+    %v4:fpr32 = FLW %f, 16 :: (load (s32))
+    %v5:fpr32 = FLW %f, 20 :: (load (s32))
+    %v6:fpr32 = FLW %f, 24 :: (load (s32))
+    %v7:fpr32 = FLW %f, 28 :: (load (s32))
+    %v8:fpr32 = FLW %f, 32 :: (load (s32))
+    %v9:fpr32 = FLW %f, 36 :: (load (s32))
+    %v10:fpr32 = FLW %f, 40 :: (load (s32))
+    %v11:fpr32 = FLW %f, 44 :: (load (s32))
+    %v12:fpr32 = FLW %f, 48 :: (load (s32))
+    %v13:fpr32 = FLW %f, 52 :: (load (s32))
+    %v14:fpr32 = FLW %f, 56 :: (load (s32))
+    %v15:fpr32 = FLW %f, 60 :: (load (s32))
+    %v16:fpr32 = FLW %f, 64 :: (load (s32))
+    %v17:fpr32 = FLW %f, 68 :: (load (s32))
+    %v18:fpr32 = FLW %f, 72 :: (load (s32))
+    %v19:fpr32 = FLW %f, 76 :: (load (s32))
+    %v20:fpr32 = FLW %f, 80 :: (load (s32))
+    %v21:fpr32 = FLW %f, 84 :: (load (s32))
+    %v22:fpr32 = FLW %f, 88 :: (load (s32))
+    %v23:fpr32 = FLW %f, 92 :: (load (s32))
+    %v24:fpr32 = FLW %f, 96 :: (load (s32))
+    %v25:fpr32 = FLW %f, 100 :: (load (s32))
+    %v26:fpr32 = FLW %f, 104 :: (load (s32))
+    %v27:fpr32 = FLW %f, 108 :: (load (s32))
+    %v28:fpr32 = FLW %f, 112 :: (load (s32))
+    %q:fprg4_with_sub_16_in_fpr16c = VX_FLW_Q %b, 32 :: (load (s128), align 4)
+    %w0:fpr32 = FSGNJ_S %q.sub_fpr32_g4_0, %q.sub_fpr32_g4_0
+    %w1:fpr32 = FSGNJ_S %q.sub_fpr32_g4_1, %w0
+    %w2:fpr32 = FSGNJ_S %q.sub_fpr32_g4_2, %w1
+    FSW %w2, %g, 0 :: (store (s32))
+    C_FSW %q.sub_fpr32_g4_3, %gc, 4 :: (store (s32))
     %s1:fpr32 = FSGNJ_S %v0, %v1
     %s2:fpr32 = FSGNJ_S %s1, %v2
     %s3:fpr32 = FSGNJ_S %s2, %v3
@@ -508,97 +597,6 @@ body: |
     %w2:fpr32 = FSGNJ_S %q.sub_fpr32_g4_2, %w1
     %w3:fpr32 = FSGNJ_S %q.sub_fpr32_g4_3, %w2
     FSW %w3, %g, 0 :: (store (s32))
-    %s1:fpr32 = FSGNJ_S %v0, %v1
-    %s2:fpr32 = FSGNJ_S %s1, %v2
-    %s3:fpr32 = FSGNJ_S %s2, %v3
-    %s4:fpr32 = FSGNJ_S %s3, %v4
-    %s5:fpr32 = FSGNJ_S %s4, %v5
-    %s6:fpr32 = FSGNJ_S %s5, %v6
-    %s7:fpr32 = FSGNJ_S %s6, %v7
-    %s8:fpr32 = FSGNJ_S %s7, %v8
-    %s9:fpr32 = FSGNJ_S %s8, %v9
-    %s10:fpr32 = FSGNJ_S %s9, %v10
-    %s11:fpr32 = FSGNJ_S %s10, %v11
-    %s12:fpr32 = FSGNJ_S %s11, %v12
-    %s13:fpr32 = FSGNJ_S %s12, %v13
-    %s14:fpr32 = FSGNJ_S %s13, %v14
-    %s15:fpr32 = FSGNJ_S %s14, %v15
-    %s16:fpr32 = FSGNJ_S %s15, %v16
-    %s17:fpr32 = FSGNJ_S %s16, %v17
-    %s18:fpr32 = FSGNJ_S %s17, %v18
-    %s19:fpr32 = FSGNJ_S %s18, %v19
-    %s20:fpr32 = FSGNJ_S %s19, %v20
-    %s21:fpr32 = FSGNJ_S %s20, %v21
-    %s22:fpr32 = FSGNJ_S %s21, %v22
-    %s23:fpr32 = FSGNJ_S %s22, %v23
-    %s24:fpr32 = FSGNJ_S %s23, %v24
-    %s25:fpr32 = FSGNJ_S %s24, %v25
-    %s26:fpr32 = FSGNJ_S %s25, %v26
-    %s27:fpr32 = FSGNJ_S %s26, %v27
-    %s28:fpr32 = FSGNJ_S %s27, %v28
-    $f10_f = COPY %s28
-    PseudoRET implicit $f10_f
-...
----
-name: base_killed
-tracksRegLiveness: true
-body: |
-  bb.0:
-    liveins: $x10, $x11, $x12
-
-    ; CHECK-LABEL: name: base_killed
-    ; CHECK: [[FLW:%[0-9]+]]:fpr32 = FLW %b, 32 :: (load (s32))
-    ; CHECK-NEXT: %w0:fpr32 = FSGNJ_S [[FLW]], [[FLW]]
-    ; CHECK-NEXT: [[FLW1:%[0-9]+]]:fpr32 = FLW %b, 36 :: (load (s32) from unknown-address + 4)
-    ; CHECK-NEXT: %w1:fpr32 = FSGNJ_S [[FLW1]], %w0
-    ; CHECK-NEXT: %r:fpr32 = FLW %b, 64 :: (load (s32))
-    ; CHECK-NEXT: [[FLW2:%[0-9]+]]:fpr32 = FLW %b, 40 :: (load (s32) from unknown-address + 8)
-    ; CHECK-NEXT: %w2:fpr32 = FSGNJ_S [[FLW2]], %w1
-    ; CHECK-NEXT: [[FLW3:%[0-9]+]]:fpr32 = FLW %b, 44 :: (load (s32) from unknown-address + 12)
-    ; CHECK-NEXT: %w3:fpr32 = FSGNJ_S [[FLW3]], %w2
-    ; CHECK-NEXT: FSW %w3, %g, 0 :: (store (s32))
-    ; CHECK-NEXT: FSW %r, %g, 8 :: (store (s32))
-    %b:gpr = COPY $x10
-    %f:gpr = COPY $x11
-    %g:gpr = COPY $x12
-    %c:gprjalr = COPY $x12
-    %v0:fpr32 = FLW %f, 0 :: (load (s32))
-    %v1:fpr32 = FLW %f, 4 :: (load (s32))
-    %v2:fpr32 = FLW %f, 8 :: (load (s32))
-    %v3:fpr32 = FLW %f, 12 :: (load (s32))
-    %v4:fpr32 = FLW %f, 16 :: (load (s32))
-    %v5:fpr32 = FLW %f, 20 :: (load (s32))
-    %v6:fpr32 = FLW %f, 24 :: (load (s32))
-    %v7:fpr32 = FLW %f, 28 :: (load (s32))
-    %v8:fpr32 = FLW %f, 32 :: (load (s32))
-    %v9:fpr32 = FLW %f, 36 :: (load (s32))
-    %v10:fpr32 = FLW %f, 40 :: (load (s32))
-    %v11:fpr32 = FLW %f, 44 :: (load (s32))
-    %v12:fpr32 = FLW %f, 48 :: (load (s32))
-    %v13:fpr32 = FLW %f, 52 :: (load (s32))
-    %v14:fpr32 = FLW %f, 56 :: (load (s32))
-    %v15:fpr32 = FLW %f, 60 :: (load (s32))
-    %v16:fpr32 = FLW %f, 64 :: (load (s32))
-    %v17:fpr32 = FLW %f, 68 :: (load (s32))
-    %v18:fpr32 = FLW %f, 72 :: (load (s32))
-    %v19:fpr32 = FLW %f, 76 :: (load (s32))
-    %v20:fpr32 = FLW %f, 80 :: (load (s32))
-    %v21:fpr32 = FLW %f, 84 :: (load (s32))
-    %v22:fpr32 = FLW %f, 88 :: (load (s32))
-    %v23:fpr32 = FLW %f, 92 :: (load (s32))
-    %v24:fpr32 = FLW %f, 96 :: (load (s32))
-    %v25:fpr32 = FLW %f, 100 :: (load (s32))
-    %v26:fpr32 = FLW %f, 104 :: (load (s32))
-    %v27:fpr32 = FLW %f, 108 :: (load (s32))
-    %v28:fpr32 = FLW %f, 112 :: (load (s32))
-    %q:fprg4 = VX_FLW_Q %b, 32 :: (load (s128), align 4)
-    %w0:fpr32 = FSGNJ_S %q.sub_fpr32_g4_0, %q.sub_fpr32_g4_0
-    %w1:fpr32 = FSGNJ_S %q.sub_fpr32_g4_1, %w0
-    %r:fpr32 = FLW killed %b, 64 :: (load (s32))
-    %w2:fpr32 = FSGNJ_S %q.sub_fpr32_g4_2, %w1
-    %w3:fpr32 = FSGNJ_S %q.sub_fpr32_g4_3, %w2
-    FSW %w3, %g, 0 :: (store (s32))
-    FSW %r, %g, 8 :: (store (s32))
     %s1:fpr32 = FSGNJ_S %v0, %v1
     %s2:fpr32 = FSGNJ_S %s1, %v2
     %s3:fpr32 = FSGNJ_S %s2, %v3

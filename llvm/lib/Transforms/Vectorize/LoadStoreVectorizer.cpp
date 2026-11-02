@@ -107,6 +107,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <iterator>
 #include <numeric>
 #include <optional>
@@ -346,10 +347,14 @@ private:
 };
 
 class LoadStoreVectorizerLegacyPass : public FunctionPass {
+  std::function<bool(const Function &)> PredicateFtor;
+
 public:
   static char ID;
 
-  LoadStoreVectorizerLegacyPass() : FunctionPass(ID) {
+  LoadStoreVectorizerLegacyPass(
+      std::function<bool(const Function &)> Ftor = nullptr)
+      : FunctionPass(ID), PredicateFtor(std::move(Ftor)) {
     initializeLoadStoreVectorizerLegacyPassPass(
         *PassRegistry::getPassRegistry());
   }
@@ -385,13 +390,15 @@ INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
 INITIALIZE_PASS_END(LoadStoreVectorizerLegacyPass, DEBUG_TYPE,
                     "Vectorize load and store instructions", false, false)
 
-Pass *llvm::createLoadStoreVectorizerPass() {
-  return new LoadStoreVectorizerLegacyPass();
+Pass *llvm::createLoadStoreVectorizerPass(
+    std::function<bool(const Function &)> Ftor) {
+  return new LoadStoreVectorizerLegacyPass(std::move(Ftor));
 }
 
 bool LoadStoreVectorizerLegacyPass::runOnFunction(Function &F) {
   // Don't vectorize when the attribute NoImplicitFloat is used.
-  if (skipFunction(F) || F.hasFnAttribute(Attribute::NoImplicitFloat))
+  if (skipFunction(F) || F.hasFnAttribute(Attribute::NoImplicitFloat) ||
+      (PredicateFtor && !PredicateFtor(F)))
     return false;
 
   AliasAnalysis &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();

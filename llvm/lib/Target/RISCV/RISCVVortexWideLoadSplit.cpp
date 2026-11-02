@@ -259,8 +259,8 @@ void RISCVVortexWideLoadSplit::split(WideLoad &W,
   LIS->RemoveMachineInstrFromMaps(MI);
   MI.eraseFromParent();
   LIS->removeInterval(W.Dst);
-  // The base now reaches the word loads, which may lie past a former kill.
-  MRI->clearKillFlags(Base);
+  // The base now reaches the word loads. Recomputing its interval also
+  // clears any kill flag on it, which a word load may now follow.
   LIS->removeInterval(Base);
   LIS->createAndComputeVirtRegInterval(Base);
 }

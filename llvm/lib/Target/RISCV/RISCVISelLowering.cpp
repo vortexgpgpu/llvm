@@ -2676,8 +2676,6 @@ RISCVTargetLowering::decomposeSubvectorInsertExtractToSubRegs(
   return {SubRegIdx, InsertExtractIdx};
 }
 
-// Permit combining of mask vectors as BUILD_VECTOR never expands to scalar
-// stores for those types.
 static bool getXVortexGroupLanes(const TargetLowering &TLI, MVT VT,
                                  unsigned &RCID, MVT &ElemVT,
                                  ArrayRef<unsigned> &SubRegs);
@@ -2697,6 +2695,8 @@ bool RISCVTargetLowering::canMergeStoresTo(unsigned AddressSpace, EVT MemVT,
                                 SubRegs));
 }
 
+// Permit combining of mask vectors as BUILD_VECTOR never expands to scalar
+// stores for those types.
 bool RISCVTargetLowering::mergeStoresAfterLegalization(EVT VT) const {
   return !Subtarget.useRVVForFixedLengthVectors() ||
          (VT.isFixedLengthVector() && VT.getVectorElementType() == MVT::i1);
