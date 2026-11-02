@@ -2266,6 +2266,13 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
   }
   case ISD::BITCAST: {
     MVT SrcVT = Node->getOperand(0).getSimpleValueType();
+    // An XVortex group of the other register file, or of another lane size,
+    // holds the bits in other registers: lowering moves them, and one left
+    // here must fail to select.
+    if (Subtarget->hasVendorXVortex() && VT.isFixedLengthVector() &&
+        SrcVT.isFixedLengthVector() &&
+        !Subtarget->useRVVForFixedLengthVectors())
+      break;
     // Just drop bitcasts between vectors if both are fixed or both are
     // scalable.
     if ((VT.isScalableVector() && SrcVT.isScalableVector()) ||

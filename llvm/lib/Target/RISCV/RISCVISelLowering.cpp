@@ -149,6 +149,7 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
       addRegisterClass(VT, RC);
       setOperationAction(ISD::LOAD, VT, Custom);
       setOperationAction(ISD::STORE, VT, Custom);
+      setOperationAction(ISD::BITCAST, VT, Custom);
       for (unsigned Op :
            {ISD::BUILD_VECTOR, ISD::EXTRACT_VECTOR_ELT,
             ISD::INSERT_VECTOR_ELT, ISD::SCALAR_TO_VECTOR,
@@ -7019,6 +7020,41 @@ SDValue RISCVTargetLowering::lowerXVortexBuildVector(SDValue Op,
                  0);
 }
 
+// A bitcast to an XVortex group from a group of the other register file
+// (v4i32 and v4f32 on RV32) moves each lane between the register files; one
+// from a group with another lane size (v4f32 and v2i64 on RV64) or from a
+// scalar expands through the stack. ISel would otherwise drop the bitcast and
+// read the source's registers as the result's.
+static SDValue lowerXVortexGroupBitcast(SDValue Op, SelectionDAG &DAG,
+                                        const TargetLowering &TLI) {
+  if (!Op.getOperand(0).getValueType().isSimple())
+    return SDValue();
+  MVT VT = Op.getSimpleValueType();
+  MVT SrcVT = Op.getOperand(0).getSimpleValueType();
+  unsigned RCID, SrcRCID;
+  MVT ElemVT, SrcElemVT;
+  ArrayRef<unsigned> SubRegs, SrcSubRegs;
+  if (!getXVortexGroupLanes(TLI, VT, RCID, ElemVT, SubRegs) ||
+      !getXVortexGroupLanes(TLI, SrcVT, SrcRCID, SrcElemVT, SrcSubRegs) ||
+      SubRegs.size() != SrcSubRegs.size() || !TLI.isTypeLegal(ElemVT) ||
+      !TLI.isTypeLegal(SrcElemVT))
+    return SDValue();
+  if (RCID == SrcRCID)
+    return Op;
+
+  SDLoc DL(Op);
+  SmallVector<SDValue, 17> Ops;
+  Ops.push_back(DAG.getTargetConstant(RCID, DL, MVT::i32));
+  for (unsigned I = 0, E = SubRegs.size(); I != E; ++I) {
+    SDValue Lane = DAG.getTargetExtractSubreg(SrcSubRegs[I], DL, SrcElemVT,
+                                              Op.getOperand(0));
+    Ops.push_back(DAG.getBitcast(ElemVT, Lane));
+    Ops.push_back(DAG.getTargetConstant(SubRegs[I], DL, MVT::i32));
+  }
+  return SDValue(DAG.getMachineNode(TargetOpcode::REG_SEQUENCE, DL, VT, Ops),
+                 0);
+}
+
 SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
                                             SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {
@@ -7075,6 +7111,14 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
     SDValue Op0 = Op.getOperand(0);
     EVT Op0VT = Op0.getValueType();
     MVT XLenVT = Subtarget.getXLenVT();
+    if (Subtarget.hasVendorXVortex() && VT.isSimple() &&
+        VT.isFixedLengthVector()) {
+      unsigned RCID;
+      MVT ElemVT;
+      ArrayRef<unsigned> SubRegs;
+      if (getXVortexGroupLanes(*this, VT.getSimpleVT(), RCID, ElemVT, SubRegs))
+        return lowerXVortexGroupBitcast(Op, DAG, *this);
+    }
     if (Op0VT == MVT::i16 &&
         ((VT == MVT::f16 && Subtarget.hasStdExtZfhminOrZhinxmin()) ||
          (VT == MVT::bf16 && Subtarget.hasStdExtZfbfmin()))) {
