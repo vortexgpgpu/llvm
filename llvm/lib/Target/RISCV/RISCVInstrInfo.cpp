@@ -642,6 +642,8 @@ unsigned RISCV::getVXWideOffsetAlign(unsigned Opcode) {
 
 std::optional<RISCV::VXGroupSpillInfo>
 RISCV::getVXGroupSpillInfo(unsigned Opcode, bool IsRV64) {
+  static const unsigned GPRG2Subs[] = {RISCV::sub_gpr_even,
+                                       RISCV::sub_gpr_odd};
   static const unsigned GPRG4Subs[] = {
       RISCV::sub_gpr_g4_0, RISCV::sub_gpr_g4_1, RISCV::sub_gpr_g4_2,
       RISCV::sub_gpr_g4_3};
@@ -662,6 +664,12 @@ RISCV::getVXGroupSpillInfo(unsigned Opcode, bool IsRV64) {
   ArrayRef<unsigned> Subs;
   bool IsLoad, IsFP;
   switch (Opcode) {
+  case RISCV::PseudoVX_GPRG2_SPILL:
+  case RISCV::PseudoVX_GPRG2_RELOAD:
+    Subs = GPRG2Subs;
+    IsFP = false;
+    IsLoad = Opcode == RISCV::PseudoVX_GPRG2_RELOAD;
+    break;
   case RISCV::PseudoVX_GPRG4_SPILL:
   case RISCV::PseudoVX_GPRG4_RELOAD:
     Subs = GPRG4Subs;
@@ -730,7 +738,10 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     Opcode = RISCV::SW_INX;
     IsScalableVector = false;
   } else if (RISCV::GPRPairRegClass.hasSubClassEq(RC)) {
-    Opcode = RISCV::PseudoRV32ZdinxSD;
+    // On RV64 only the XVortex GPRG2 (v2i64) values live in pairs, and the
+    // Zdinx pair pseudo would store just the low 32 bits of each register.
+    Opcode = STI.is64Bit() ? RISCV::PseudoVX_GPRG2_SPILL
+                           : RISCV::PseudoRV32ZdinxSD;
     IsScalableVector = false;
   } else if (RISCV::FPR16RegClass.hasSubClassEq(RC)) {
     Opcode = RISCV::FSH;
@@ -840,7 +851,8 @@ void RISCVInstrInfo::loadRegFromStackSlot(
     Opcode = RISCV::LW_INX;
     IsScalableVector = false;
   } else if (RISCV::GPRPairRegClass.hasSubClassEq(RC)) {
-    Opcode = RISCV::PseudoRV32ZdinxLD;
+    Opcode = STI.is64Bit() ? RISCV::PseudoVX_GPRG2_RELOAD
+                           : RISCV::PseudoRV32ZdinxLD;
     IsScalableVector = false;
   } else if (RISCV::FPR16RegClass.hasSubClassEq(RC)) {
     Opcode = RISCV::FLH;

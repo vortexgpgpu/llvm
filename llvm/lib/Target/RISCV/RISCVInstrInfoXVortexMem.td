@@ -102,6 +102,7 @@ multiclass VXGroupSpill<RegisterClass RC, int NumRegs> {
 }
 
 let hasSideEffects = 0 in {
+defm PseudoVX_GPRG2 : VXGroupSpill<GPRG2, 2>;
 defm PseudoVX_GPRG4 : VXGroupSpill<GPRG4, 4>;
 defm PseudoVX_GPRG8 : VXGroupSpill<GPRG8, 8>;
 defm PseudoVX_FPRG2 : VXGroupSpill<FPRG2, 2>;
