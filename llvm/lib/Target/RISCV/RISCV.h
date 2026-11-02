@@ -94,6 +94,10 @@ void initializeRISCVZacasABIFixPass(PassRegistry &);
 ModulePass *createRISCVVortexKEntryPass();
 void initializeRISCVVortexKEntryPass(PassRegistry &);
 
+FunctionPass *createRISCVVortexWideLoadSplitPass();
+void initializeRISCVVortexWideLoadSplitPass(PassRegistry &);
+extern char &RISCVVortexWideLoadSplitID;
+
 InstructionSelector *
 createRISCVInstructionSelector(const RISCVTargetMachine &,
                                const RISCVSubtarget &,

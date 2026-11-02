@@ -195,6 +195,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   initializeRISCVGatherScatterLoweringPass(*PR);
   initializeRISCVCodeGenPreparePass(*PR);
   initializeRISCVVortexKEntryPass(*PR);
+  initializeRISCVVortexWideLoadSplitPass(*PR);
   initializeRISCVPostRAExpandPseudoPass(*PR);
   initializeRISCVMergeBaseOffsetOptPass(*PR);
   initializeRISCVOptWInstrsPass(*PR);
@@ -426,8 +427,11 @@ class RISCVPassConfig : public TargetPassConfig {
 public:
   RISCVPassConfig(RISCVTargetMachine &TM, PassManagerBase &PM)
       : TargetPassConfig(TM, PM) {
-    if (TM.getOptLevel() != CodeGenOptLevel::None)
+    if (TM.getOptLevel() != CodeGenOptLevel::None) {
       substitutePass(&PostRASchedulerID, &PostMachineSchedulerID);
+      // On the scheduled code, which fixes the pressure the allocator sees.
+      insertPass(&MachineSchedulerID, &RISCVVortexWideLoadSplitID);
+    }
     setEnableSinkAndFold(EnableSinkFold);
     EnableLoopTermFold = true;
   }
