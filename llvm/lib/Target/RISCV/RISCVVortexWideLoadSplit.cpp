@@ -7,12 +7,12 @@
 //===----------------------------------------------------------------------===//
 //
 // vx_flw.d/.q define all words of a register group at once. When its words
-// are read at different points, the merged load keeps every word live from
-// the first read on, where scalar loads would each be live only from their
-// own read: a quad of a 4x4 register tile's A column, read one word per k
-// step, holds 4 FP registers across the whole k loop instead of 1. Where that
-// pushes a block's FP register pressure beyond the register file, the
-// scheduler cannot help (the group is one def), and the allocator spills.
+// are read at different points, every word is live from the group's def,
+// where a scalar load would make it live only from its own read: a quad of a
+// 4x4 register tile's A column, read one word per k step, holds 4 FP
+// registers at the first k step where scalar loads hold 1. Where that pushes
+// a block's FP register pressure beyond the register file, the scheduler
+// cannot help (the group is one def), and the allocator spills.
 //
 // The macro-op is exactly its flw uops, so it can be split back at no cost in
 // correctness. This pass runs on the scheduled code, before register
@@ -62,6 +62,7 @@ struct WideLoad {
                                          // move to
   SmallVector<std::pair<unsigned, unsigned>, 4> Words; // first/last read
   SmallVector<SmallVector<MachineOperand *, 4>, 4> Uses; // per word
+  SmallVector<const TargetRegisterClass *, 4> RCs; // per word
   bool Split = false;
 };
 
@@ -135,11 +136,17 @@ bool RISCVVortexWideLoadSplit::collect(
     const DenseMap<const MachineInstr *, unsigned> &Pos, WideLoad &W) const {
   unsigned NumWords = getWordCount(MI.getOpcode());
   if (!NumWords || !MI.getOperand(1).isReg() ||
-      !MI.getOperand(1).getReg().isVirtual() || !MI.hasOneMemOperand())
+      !MI.getOperand(1).getReg().isVirtual() || !MI.hasOneMemOperand() ||
+      MI.hasOrderedMemoryRef())
     return false;
   Register Dst = MI.getOperand(0).getReg();
   if (!Dst.isVirtual() || MI.getOperand(0).getSubReg() ||
       !MRI->hasOneDef(Dst))
+    return false;
+
+  // Every read must follow the def in this block: a value that is live into
+  // the block is read before it is redefined.
+  if (LIS->isLiveInToMBB(LIS->getInterval(Dst), MI.getParent()))
     return false;
 
   W.MI = &MI;
@@ -148,15 +155,23 @@ bool RISCVVortexWideLoadSplit::collect(
   W.Last = W.Def;
   W.Words.assign(NumWords, {~0u, 0u});
   W.Uses.assign(NumWords, {});
+  W.RCs.assign(NumWords, &RISCV::FPR32RegClass);
   unsigned GroupBits = TRI->getRegSizeInBits(*MRI->getRegClass(Dst));
   for (MachineOperand &MO : MRI->use_nodbg_operands(Dst)) {
     MachineInstr *UseMI = MO.getParent();
     auto It = Pos.find(UseMI);
     unsigned Sub = MO.getSubReg();
-    if (It == Pos.end() || !Sub || MO.isDef() ||
+    if (It == Pos.end() || It->second <= W.Def || !Sub || MO.isDef() ||
         TRI->getSubRegIdxSize(Sub) != GroupBits / NumWords)
       return false;
     unsigned Word = TRI->getSubRegIdxOffset(Sub) / (GroupBits / NumWords);
+    // The word's register must also satisfy what the reader requires.
+    if (const TargetRegisterClass *RC = UseMI->getRegClassConstraint(
+            MO.getOperandNo(), TII, TRI)) {
+      W.RCs[Word] = TRI->getCommonSubClass(W.RCs[Word], RC);
+      if (!W.RCs[Word])
+        return false;
+    }
     auto &[First, Last] = W.Words[Word];
     First = std::min(First, It->second);
     Last = std::max(Last, It->second);
@@ -195,10 +210,11 @@ void RISCVVortexWideLoadSplit::split(WideLoad &W,
   int64_t Imm = MI.getOperand(2).getImm();
   MachineMemOperand *MMO = *MI.memoperands_begin();
 
+  SmallVector<MachineInstr *, 4> WordLoads(W.Words.size());
   for (unsigned Word = 0, E = W.Words.size(); Word != E; ++Word) {
     if (W.Uses[Word].empty())
       continue;
-    Register Reg = MRI->createVirtualRegister(&RISCV::FPR32RegClass);
+    Register Reg = MRI->createVirtualRegister(W.RCs[Word]);
     MachineInstr *Before = &MI;
     if (W.Words[Word].first <= W.Sink)
       Before = Order[W.Words[Word].first];
@@ -208,6 +224,7 @@ void RISCVVortexWideLoadSplit::split(WideLoad &W,
             .addImm(Imm + 4 * Word)
             .addMemOperand(MF.getMachineMemOperand(MMO, 4 * Word, 4));
     LIS->InsertMachineInstrInMaps(*Load);
+    WordLoads[Word] = Load;
     for (MachineOperand *MO : W.Uses[Word]) {
       MO->setReg(Reg);
       MO->setSubReg(0);
@@ -216,14 +233,34 @@ void RISCVVortexWideLoadSplit::split(WideLoad &W,
     LIS->createAndComputeVirtRegInterval(Reg);
   }
 
+  // A debug value of one word after that word's load follows its register;
+  // any other is dropped.
+  unsigned WordBits = TRI->getRegSizeInBits(*MRI->getRegClass(W.Dst)) /
+                      W.Words.size();
   for (MachineOperand &MO : make_early_inc_range(MRI->reg_operands(W.Dst))) {
     assert(MO.isDebug() || MO.getParent() == &MI);
-    if (MO.isDebug())
+    if (!MO.isDebug())
+      continue;
+    unsigned Sub = MO.getSubReg();
+    MachineInstr *Load = nullptr;
+    if (Sub && TRI->getSubRegIdxSize(Sub) == WordBits)
+      Load = WordLoads[TRI->getSubRegIdxOffset(Sub) / WordBits];
+    if (Load && any_of(make_range(std::next(MachineBasicBlock::iterator(Load)),
+                                  MBB.end()),
+                       [&](const MachineInstr &I) {
+                         return &I == MO.getParent();
+                       })) {
+      MO.setReg(Load->getOperand(0).getReg());
+      MO.setSubReg(0);
+    } else {
       MO.getParent()->setDebugValueUndef();
+    }
   }
   LIS->RemoveMachineInstrFromMaps(MI);
   MI.eraseFromParent();
   LIS->removeInterval(W.Dst);
+  // The base now reaches the word loads, which may lie past a former kill.
+  MRI->clearKillFlags(Base);
   LIS->removeInterval(Base);
   LIS->createAndComputeVirtRegInterval(Base);
 }
@@ -246,9 +283,26 @@ bool RISCVVortexWideLoadSplit::processBlock(MachineBasicBlock &MBB) {
   if (Loads.empty())
     return false;
 
-  // FP pressure after each instruction, from the live intervals.
+  // FP pressure after each instruction, from the live intervals. A group
+  // counts whole until its last read, as the scheduler counts it, although
+  // sub-register liveness frees its words one by one: the allocator still
+  // needs a free aligned group at the def, and counting freed words as
+  // reusable left spills in the 4x4 tile.
   unsigned N = Order.size();
-  SmallVector<int, 128> Pressure(N, 0);
+  SmallVector<SlotIndex, 128> Slots;
+  for (MachineInstr *MI : Order)
+    Slots.push_back(LIS->getInstructionIndex(*MI).getRegSlot());
+  SmallVector<int, 129> Diff(N + 1, 0);
+  auto AddRange = [&](const LiveRange &LR, int Weight) {
+    for (const LiveRange::Segment &Seg : LR) {
+      unsigned From = llvm::lower_bound(Slots, Seg.start) - Slots.begin();
+      unsigned To = llvm::lower_bound(Slots, Seg.end) - Slots.begin();
+      if (From < To) {
+        Diff[From] += Weight;
+        Diff[To] -= Weight;
+      }
+    }
+  };
   SlotIndex Start = LIS->getMBBStartIdx(&MBB), End = LIS->getMBBEndIdx(&MBB);
   for (unsigned I = 0, E = MRI->getNumVirtRegs(); I != E; ++I) {
     Register Reg = Register::index2VirtReg(I);
@@ -260,12 +314,15 @@ bool RISCVVortexWideLoadSplit::processBlock(MachineBasicBlock &MBB) {
     const LiveInterval &LI = LIS->getInterval(Reg);
     if (!LI.overlaps(Start, End))
       continue;
-    for (unsigned P = 0; P != N; ++P)
-      if (LI.liveAt(LIS->getInstructionIndex(*Order[P]).getRegSlot()))
-        Pressure[P] += Weight;
+    AddRange(LI, Weight);
   }
+  SmallVector<int, 128> Pressure(N, 0);
+  for (int P = 0, Sum = 0; P != int(N); ++P)
+    Pressure[P] = Sum += Diff[P];
 
-  // Pressure change after position P when W is split.
+  // Pressure change after position P when W is split: each word that is
+  // read is live from its own load to its last read instead of the group
+  // from its def to its last read.
   auto Delta = [&](const WideLoad &W, unsigned P) {
     int D = 0;
     if (P >= W.Def && P < W.Last)
