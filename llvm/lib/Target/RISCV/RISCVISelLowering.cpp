@@ -2339,6 +2339,27 @@ bool RISCVTargetLowering::isExtractSubvectorCheap(EVT ResVT, EVT SrcVT,
   return (ResElts * 2) == SrcElts && (Index == 0 || Index == ResElts);
 }
 
+// XVortex makes small fixed-length vectors legal in GPR/FPR groups (GPRG*,
+// FPRG*). The calling convention still passes them element by element, as it
+// does without XVortex, where the type is split before it reaches CC_RISCV.
+static bool isXVortexGroupCCType(const RISCVSubtarget &Subtarget,
+                                 const TargetLowering &TLI, EVT VT) {
+  if (!Subtarget.hasVendorXVortex() || !VT.isSimple() ||
+      !VT.isFixedLengthVector() || !TLI.isTypeLegal(VT))
+    return false;
+  switch (TLI.getRegClassFor(VT.getSimpleVT())->getID()) {
+  case RISCV::GPRG2RegClassID:
+  case RISCV::GPRG4RegClassID:
+  case RISCV::GPRG8RegClassID:
+  case RISCV::FPRG2RegClassID:
+  case RISCV::FPRG4RegClassID:
+  case RISCV::FPRG8RegClassID:
+    return true;
+  default:
+    return false;
+  }
+}
+
 MVT RISCVTargetLowering::getRegisterTypeForCallingConv(LLVMContext &Context,
                                                       CallingConv::ID CC,
                                                       EVT VT) const {
@@ -2347,6 +2368,9 @@ MVT RISCVTargetLowering::getRegisterTypeForCallingConv(LLVMContext &Context,
   if (VT == MVT::f16 && Subtarget.hasStdExtFOrZfinx() &&
       !Subtarget.hasStdExtZfhminOrZhinxmin())
     return MVT::f32;
+
+  if (isXVortexGroupCCType(Subtarget, *this, VT))
+    return VT.getVectorElementType().getSimpleVT();
 
   MVT PartVT = TargetLowering::getRegisterTypeForCallingConv(Context, CC, VT);
 
@@ -2373,12 +2397,22 @@ unsigned RISCVTargetLowering::getNumRegistersForCallingConv(LLVMContext &Context
       !Subtarget.hasStdExtZfhminOrZhinxmin())
     return 1;
 
+  if (isXVortexGroupCCType(Subtarget, *this, VT))
+    return VT.getVectorNumElements();
+
   return TargetLowering::getNumRegistersForCallingConv(Context, CC, VT);
 }
 
 unsigned RISCVTargetLowering::getVectorTypeBreakdownForCallingConv(
     LLVMContext &Context, CallingConv::ID CC, EVT VT, EVT &IntermediateVT,
     unsigned &NumIntermediates, MVT &RegisterVT) const {
+  if (isXVortexGroupCCType(Subtarget, *this, VT)) {
+    IntermediateVT = VT.getVectorElementType();
+    RegisterVT = IntermediateVT.getSimpleVT();
+    NumIntermediates = VT.getVectorNumElements();
+    return NumIntermediates;
+  }
+
   unsigned NumRegs = TargetLowering::getVectorTypeBreakdownForCallingConv(
       Context, CC, VT, IntermediateVT, NumIntermediates, RegisterVT);
 
@@ -6802,6 +6836,15 @@ static bool getXVortexLanesInfo(MVT VT, unsigned &RCID, MVT &ElemVT,
   }
 }
 
+// getXVortexLanesInfo for a VT that lives in its XVortex group register class.
+// With V, the fixed-length vectors live in RVV registers instead.
+static bool getXVortexGroupLanes(const TargetLowering &TLI, MVT VT,
+                                 unsigned &RCID, MVT &ElemVT,
+                                 ArrayRef<unsigned> &SubRegs) {
+  return getXVortexLanesInfo(VT, RCID, ElemVT, SubRegs) &&
+         TLI.isTypeLegal(VT) && TLI.getRegClassFor(VT)->getID() == RCID;
+}
+
 // XVortex load lowering: N scalar lw/flw at consecutive offsets, then
 // REG_SEQUENCE to assemble into the grouped register class. Bypasses
 // BUILD_VECTOR (which is Expand) by emitting a MachineSDNode directly.
@@ -6824,6 +6867,17 @@ static SDValue lowerXVortexGroupedLoad(SDValue Op, SelectionDAG &DAG,
   SDValue BasePtr = Load->getBasePtr();
   auto *MMO = Load->getMemOperand();
 
+  // A local v2f32/v4f32 load through a window address, with its full
+  // alignment proven, is one vx_flds.d/.q.
+  if ((VT == MVT::v2f32 || VT == MVT::v4f32) &&
+      Subtarget.hasVortexWideLocalLoads() &&
+      Load->getAddressSpace() == VortexAS::Local && !Load->isAtomic() &&
+      Load->getAlign() >= VT.getStoreSize().getFixedValue() &&
+      MMO->getValue() && isVortexLocalWindowPointer(MMO->getValue()))
+    return DAG.getMemIntrinsicNode(RISCVISD::VX_FLDS, DL,
+                                   DAG.getVTList(VT, MVT::Other),
+                                   {Chain, BasePtr}, VT, MMO);
+
   SmallVector<SDValue, 17> RegSeqOps;
   RegSeqOps.push_back(DAG.getTargetConstant(RCID, DL, MVT::i32));
   SmallVector<SDValue, 8> Chains;
@@ -6837,15 +6891,6 @@ static SDValue lowerXVortexGroupedLoad(SDValue Op, SelectionDAG &DAG,
         MMO->getPointerInfo().getWithOffset(i * ElemBytes), MMO->getAlign(),
         MMO->getFlags());
     RegSeqOps.push_back(ElemLoad);
-// getXVortexLanesInfo for a VT that lives in its XVortex group register class.
-// With V, the fixed-length vectors live in RVV registers instead.
-static bool getXVortexGroupLanes(const TargetLowering &TLI, MVT VT,
-                                 unsigned &RCID, MVT &ElemVT,
-                                 ArrayRef<unsigned> &SubRegs) {
-  return getXVortexLanesInfo(VT, RCID, ElemVT, SubRegs) &&
-         TLI.isTypeLegal(VT) && TLI.getRegClassFor(VT)->getID() == RCID;
-}
-
     RegSeqOps.push_back(DAG.getTargetConstant(SubRegs[i], DL, MVT::i32));
     Chains.push_back(ElemLoad.getValue(1));
   }
@@ -6867,17 +6912,6 @@ static SDValue lowerXVortexGroupedStore(SDValue Op, SelectionDAG &DAG,
   if (!getXVortexGroupLanes(DAG.getTargetLoweringInfo(), VT, RCID, ElemVT,
                             SubRegs))
     return SDValue();
-
-  // A local v2f32/v4f32 load through a window address, with its full
-  // alignment proven, is one vx_flds.d/.q.
-  if ((VT == MVT::v2f32 || VT == MVT::v4f32) &&
-      Subtarget.hasVortexWideLocalLoads() &&
-      Load->getAddressSpace() == VortexAS::Local && !Load->isAtomic() &&
-      Load->getAlign() >= VT.getStoreSize().getFixedValue() &&
-      MMO->getValue() && isVortexLocalWindowPointer(MMO->getValue()))
-    return DAG.getMemIntrinsicNode(RISCVISD::VX_FLDS, DL,
-                                   DAG.getVTList(VT, MVT::Other),
-                                   {Chain, BasePtr}, VT, MMO);
 
   SDLoc DL(Op);
   MVT XLenVT = Subtarget.getXLenVT();
@@ -9537,6 +9571,20 @@ SDValue RISCVTargetLowering::lowerEXTRACT_VECTOR_ELT(SDValue Op,
   MVT VecVT = Vec.getSimpleValueType();
   MVT XLenVT = Subtarget.getXLenVT();
 
+  // XVortex groups: a constant lane is a sub-register; anything else expands.
+  if (Subtarget.hasVendorXVortex()) {
+    unsigned RCID;
+    MVT ElemVT;
+    ArrayRef<unsigned> SubRegs;
+    if (getXVortexGroupLanes(*this, VecVT, RCID, ElemVT, SubRegs)) {
+      auto *Lane = dyn_cast<ConstantSDNode>(Idx);
+      if (Lane && EltVT == ElemVT && Lane->getZExtValue() < SubRegs.size())
+        return DAG.getTargetExtractSubreg(SubRegs[Lane->getZExtValue()], DL,
+                                          ElemVT, Vec);
+      return SDValue();
+    }
+  }
+
   if (VecVT.getVectorElementType() == MVT::i1) {
     // Use vfirst.m to extract the first bit.
     if (isNullConstant(Idx)) {
@@ -9571,20 +9619,6 @@ SDValue RISCVTargetLowering::lowerEXTRACT_VECTOR_ELT(SDValue Op,
           ExtractBitIdx = Idx;
         } else {
           WideEltVT = LargestEltVT;
-  // XVortex groups: a constant lane is a sub-register; anything else expands.
-  if (Subtarget.hasVendorXVortex()) {
-    unsigned RCID;
-    MVT ElemVT;
-    ArrayRef<unsigned> SubRegs;
-    if (getXVortexGroupLanes(*this, VecVT, RCID, ElemVT, SubRegs)) {
-      auto *Lane = dyn_cast<ConstantSDNode>(Idx);
-      if (Lane && EltVT == ElemVT && Lane->getZExtValue() < SubRegs.size())
-        return DAG.getTargetExtractSubreg(SubRegs[Lane->getZExtValue()], DL,
-                                          ElemVT, Vec);
-      return SDValue();
-    }
-  }
-
           WidenVecLen = NumElts / WideEltVT.getSizeInBits();
           // extract element index = index / element width
           ExtractElementIdx = DAG.getNode(
@@ -21580,6 +21614,7 @@ const char *RISCVTargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(TH_LDD)
   NODE_NAME_CASE(TH_SWD)
   NODE_NAME_CASE(TH_SDD)
+  NODE_NAME_CASE(VX_FLDS)
   NODE_NAME_CASE(VMV_V_V_VL)
   NODE_NAME_CASE(VMV_V_X_VL)
   NODE_NAME_CASE(VFMV_V_F_VL)
@@ -21614,7 +21649,6 @@ const char *RISCVTargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(ADD_VL)
   NODE_NAME_CASE(AND_VL)
   NODE_NAME_CASE(MUL_VL)
-  NODE_NAME_CASE(VX_FLDS)
   NODE_NAME_CASE(OR_VL)
   NODE_NAME_CASE(SDIV_VL)
   NODE_NAME_CASE(SHL_VL)
