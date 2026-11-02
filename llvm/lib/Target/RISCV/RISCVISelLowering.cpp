@@ -2347,14 +2347,24 @@ bool RISCVTargetLowering::isExtractSubvectorCheap(EVT ResVT, EVT SrcVT,
 }
 
 // XVortex makes small fixed-length vectors legal in GPR/FPR groups (GPRG*,
-// FPRG*). The calling convention still passes them element by element, as it
-// does without XVortex, where the type is split before it reaches CC_RISCV.
+// FPRG*), and other fixed-length vectors legalize into them: v4i32 on RV64 is
+// promoted to v4i64, v4i8 to v4i32, v3f32 widened to v4f32, v16i32 split into
+// v8i32. None of these may reach CC_RISCV, which places vectors only in RVV
+// registers. The calling convention passes them element by element, as it
+// does without XVortex, where no fixed-length vector type is legal.
 static bool isXVortexGroupCCType(const RISCVSubtarget &Subtarget,
-                                 const TargetLowering &TLI, EVT VT) {
-  if (!Subtarget.hasVendorXVortex() || !VT.isSimple() ||
-      !VT.isFixedLengthVector() || !TLI.isTypeLegal(VT))
+                                 const TargetLowering &TLI,
+                                 LLVMContext &Context, EVT VT) {
+  if (!Subtarget.hasVendorXVortex() || !VT.isFixedLengthVector())
     return false;
-  switch (TLI.getRegClassFor(VT.getSimpleVT())->getID()) {
+  EVT IntermediateVT;
+  unsigned NumIntermediates;
+  MVT RegisterVT;
+  TLI.getVectorTypeBreakdown(Context, VT, IntermediateVT, NumIntermediates,
+                             RegisterVT);
+  if (!RegisterVT.isFixedLengthVector() || !TLI.isTypeLegal(RegisterVT))
+    return false;
+  switch (TLI.getRegClassFor(RegisterVT)->getID()) {
   case RISCV::GPRG2RegClassID:
   case RISCV::GPRG4RegClassID:
   case RISCV::GPRG8RegClassID:
@@ -2376,8 +2386,8 @@ MVT RISCVTargetLowering::getRegisterTypeForCallingConv(LLVMContext &Context,
       !Subtarget.hasStdExtZfhminOrZhinxmin())
     return MVT::f32;
 
-  if (isXVortexGroupCCType(Subtarget, *this, VT))
-    return VT.getVectorElementType().getSimpleVT();
+  if (isXVortexGroupCCType(Subtarget, *this, Context, VT))
+    return getRegisterType(Context, VT.getVectorElementType());
 
   MVT PartVT = TargetLowering::getRegisterTypeForCallingConv(Context, CC, VT);
 
@@ -2404,20 +2414,23 @@ unsigned RISCVTargetLowering::getNumRegistersForCallingConv(LLVMContext &Context
       !Subtarget.hasStdExtZfhminOrZhinxmin())
     return 1;
 
-  if (isXVortexGroupCCType(Subtarget, *this, VT))
-    return VT.getVectorNumElements();
+  if (isXVortexGroupCCType(Subtarget, *this, Context, VT))
+    return VT.getVectorNumElements() *
+           getNumRegisters(Context, VT.getVectorElementType());
 
   return TargetLowering::getNumRegistersForCallingConv(Context, CC, VT);
 }
 
+// The scalarized breakdown getVectorTypeBreakdown gives a fixed-length vector
+// when no vector type is legal: each element in the registers of its own type.
 unsigned RISCVTargetLowering::getVectorTypeBreakdownForCallingConv(
     LLVMContext &Context, CallingConv::ID CC, EVT VT, EVT &IntermediateVT,
     unsigned &NumIntermediates, MVT &RegisterVT) const {
-  if (isXVortexGroupCCType(Subtarget, *this, VT)) {
+  if (isXVortexGroupCCType(Subtarget, *this, Context, VT)) {
     IntermediateVT = VT.getVectorElementType();
-    RegisterVT = IntermediateVT.getSimpleVT();
+    RegisterVT = getRegisterType(Context, IntermediateVT);
     NumIntermediates = VT.getVectorNumElements();
-    return NumIntermediates;
+    return NumIntermediates * getNumRegisters(Context, IntermediateVT);
   }
 
   unsigned NumRegs = TargetLowering::getVectorTypeBreakdownForCallingConv(
