@@ -254,10 +254,7 @@ define void @copy_v3f32(ptr %p, ptr %q) {
 ; RV64-NEXT:    fsw fa4, 8(a0)
 ; RV64-NEXT:    fsw fa2, 0(sp)
 ; RV64-NEXT:    fsw fa3, 4(sp)
-; RV64-NEXT:    fsw fa4, 8(sp)
-; RV64-NEXT:    fsw fa5, 12(sp)
 ; RV64-NEXT:    ld a2, 0(sp)
-; RV64-NEXT:    ld zero, 8(sp)
 ; RV64-NEXT:    sd a2, 0(a0)
 ; RV64-NEXT:    addi sp, sp, 16
 ; RV64-NEXT:    .cfi_def_cfa_offset 0

@@ -187,10 +187,7 @@ define void @pass_v4i64(ptr %p) {
 define i32 @extract_v4i32(ptr %p, i32 %s) {
 ; RV32-LABEL: extract_v4i32:
 ; RV32:       # %bb.0:
-; RV32-NEXT:    lw zero, 4(a0)
 ; RV32-NEXT:    lw a4, 8(a0)
-; RV32-NEXT:    lw zero, 0(a0)
-; RV32-NEXT:    lw zero, 12(a0)
 ; RV32-NEXT:    add a0, a4, a1
 ; RV32-NEXT:    ret
 ;
@@ -278,8 +275,6 @@ define i64 @extract_v2i64(ptr %p, i64 %s) {
 ; RV32-NEXT:    .cfi_def_cfa_offset 16
 ; RV32-NEXT:    lw a4, 8(a0)
 ; RV32-NEXT:    lw a5, 12(a0)
-; RV32-NEXT:    lw zero, 0(sp)
-; RV32-NEXT:    lw zero, 4(sp)
 ; RV32-NEXT:    add a0, a4, a1
 ; RV32-NEXT:    sltu a1, a0, a4
 ; RV32-NEXT:    add a2, a5, a2
@@ -291,7 +286,6 @@ define i64 @extract_v2i64(ptr %p, i64 %s) {
 ; RV64-LABEL: extract_v2i64:
 ; RV64:       # %bb.0:
 ; RV64-NEXT:    ld a3, 8(a0)
-; RV64-NEXT:    ld zero, 0(a0)
 ; RV64-NEXT:    add a0, a3, a1
 ; RV64-NEXT:    ret
 ;

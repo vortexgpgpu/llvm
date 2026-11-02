@@ -6895,6 +6895,33 @@ static bool isXVortexWideAccess(MVT VT, const MemSDNode *N,
          N->getAlign() >= Align(4);
 }
 
+// The lanes of a group load's value that its users read: all of them unless
+// every user takes one lane, as a constant-index extract or, once that is
+// lowered (users are legalized first), as a sub-register of the group.
+static APInt getXVortexLoadedLanes(const LoadSDNode *Load,
+                                   ArrayRef<unsigned> SubRegs) {
+  unsigned NumElts = SubRegs.size();
+  APInt Lanes(NumElts, 0);
+  for (const SDUse &U : Load->uses()) {
+    if (U.getResNo() != 0)
+      continue;
+    const SDNode *User = U.getUser();
+    unsigned Lane = NumElts;
+    if (User->getOpcode() == ISD::EXTRACT_VECTOR_ELT) {
+      if (auto *Idx = dyn_cast<ConstantSDNode>(User->getOperand(1)))
+        Lane = Idx->getLimitedValue(NumElts);
+    } else if (User->isMachineOpcode() &&
+               User->getMachineOpcode() == TargetOpcode::EXTRACT_SUBREG) {
+      Lane = llvm::find(SubRegs, User->getConstantOperandVal(1)) -
+             SubRegs.begin();
+    }
+    if (Lane >= NumElts)
+      return APInt::getAllOnes(NumElts);
+    Lanes.setBit(Lane);
+  }
+  return Lanes;
+}
+
 // XVortex load lowering: N scalar lw/flw at consecutive offsets, then
 // REG_SEQUENCE to assemble into the grouped register class. Bypasses
 // BUILD_VECTOR (which is Expand) by emitting a MachineSDNode directly.
@@ -6917,8 +6944,12 @@ static SDValue lowerXVortexGroupedLoad(SDValue Op, SelectionDAG &DAG,
   SDValue BasePtr = Load->getBasePtr();
   auto *MMO = Load->getMemOperand();
 
+  // A lane nothing reads is not loaded, unless the access is ordered. A wide
+  // access of which one lane is read is that lane's load.
+  APInt Lanes = Load->isSimple() ? getXVortexLoadedLanes(Load, SubRegs)
+                                 : APInt::getAllOnes(NumElts);
   if (Load->getExtensionType() == ISD::NON_EXTLOAD &&
-      isXVortexWideAccess(VT, Load, Subtarget))
+      isXVortexWideAccess(VT, Load, Subtarget) && Lanes.popcount() > 1)
     return DAG.getMemIntrinsicNode(RISCVISD::VX_FLW, DL,
                                    DAG.getVTList(VT, MVT::Other),
                                    {Chain, BasePtr}, VT, MMO);
@@ -6927,6 +6958,12 @@ static SDValue lowerXVortexGroupedLoad(SDValue Op, SelectionDAG &DAG,
   RegSeqOps.push_back(DAG.getTargetConstant(RCID, DL, MVT::i32));
   SmallVector<SDValue, 8> Chains;
   for (unsigned i = 0; i < NumElts; ++i) {
+    if (!Lanes[i]) {
+      RegSeqOps.push_back(SDValue(
+          DAG.getMachineNode(TargetOpcode::IMPLICIT_DEF, DL, ElemVT), 0));
+      RegSeqOps.push_back(DAG.getTargetConstant(SubRegs[i], DL, MVT::i32));
+      continue;
+    }
     SDValue Addr = BasePtr;
     if (i > 0)
       Addr = DAG.getNode(ISD::ADD, DL, XLenVT, BasePtr,
@@ -6939,7 +6976,9 @@ static SDValue lowerXVortexGroupedLoad(SDValue Op, SelectionDAG &DAG,
     RegSeqOps.push_back(DAG.getTargetConstant(SubRegs[i], DL, MVT::i32));
     Chains.push_back(ElemLoad.getValue(1));
   }
-  SDValue NewChain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Chains);
+  SDValue NewChain =
+      Chains.empty() ? Chain
+                     : DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Chains);
   SDValue RegSeq = SDValue(
       DAG.getMachineNode(TargetOpcode::REG_SEQUENCE, DL, VT, RegSeqOps), 0);
   return DAG.getMergeValues({RegSeq, NewChain}, DL);
