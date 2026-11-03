@@ -158,8 +158,7 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
             // ops. Without this, code like float4 component-wise selects or
             // shuffles hits "Cannot select" (e.g. hybridsort mergeSortPass).
             ISD::VECTOR_SHUFFLE, ISD::SELECT, ISD::SELECT_CC, ISD::VSELECT,
-            ISD::SETCC, ISD::CONCAT_VECTORS, ISD::EXTRACT_SUBVECTOR,
-            ISD::INSERT_SUBVECTOR,
+            ISD::SETCC, ISD::CONCAT_VECTORS, ISD::INSERT_SUBVECTOR,
             // Likewise for arithmetic/logic/conversion ops: the IR-level
             // scalarizer handles most vector ALU, but ops materialized late
             // (by DAG combines or non-kernel pipelines) must still legalize.
@@ -200,21 +199,21 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
       }
     };
     // A constant lane of a group is one of its sub-registers, and a vector
-    // built from scalars is a REG_SEQUENCE of them; any other lane goes
-    // through the stack.
+    // built from scalars or from the lanes of a wider group is a REG_SEQUENCE
+    // of them; any other lane goes through the stack.
     if (Subtarget.is64Bit()) {
       SetupXVortexVT(MVT::v2i64, &RISCV::GPRG2RegClass);
       SetupXVortexVT(MVT::v4i64, &RISCV::GPRG4RegClass);
       SetupXVortexVT(MVT::v8i64, &RISCV::GPRG8RegClass);
       setOperationAction({ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT,
-                          ISD::BUILD_VECTOR},
+                          ISD::BUILD_VECTOR, ISD::EXTRACT_SUBVECTOR},
                          {MVT::v2i64, MVT::v4i64, MVT::v8i64}, Custom);
     } else {
       SetupXVortexVT(MVT::v2i32, &RISCV::GPRG2RegClass);
       SetupXVortexVT(MVT::v4i32, &RISCV::GPRG4RegClass);
       SetupXVortexVT(MVT::v8i32, &RISCV::GPRG8RegClass);
       setOperationAction({ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT,
-                          ISD::BUILD_VECTOR},
+                          ISD::BUILD_VECTOR, ISD::EXTRACT_SUBVECTOR},
                          {MVT::v2i32, MVT::v4i32, MVT::v8i32}, Custom);
     }
     if (Subtarget.hasStdExtF()) {
@@ -222,7 +221,7 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
       SetupXVortexVT(MVT::v4f32, &RISCV::FPRG4RegClass);
       SetupXVortexVT(MVT::v8f32, &RISCV::FPRG8RegClass);
       setOperationAction({ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT,
-                          ISD::BUILD_VECTOR},
+                          ISD::BUILD_VECTOR, ISD::EXTRACT_SUBVECTOR},
                          {MVT::v2f32, MVT::v4f32, MVT::v8f32}, Custom);
     }
   }
@@ -7059,6 +7058,40 @@ SDValue RISCVTargetLowering::lowerXVortexBuildVector(SDValue Op,
                  0);
 }
 
+// A group taken from the lanes of a wider group: a REG_SEQUENCE of the
+// source's lane sub-registers, rather than a round trip through a stack slot
+// aligned to the wider group (32 bytes for v8f32).
+static SDValue lowerXVortexExtractSubvector(SDValue Op, SelectionDAG &DAG,
+                                            const TargetLowering &TLI) {
+  MVT VT = Op.getSimpleValueType();
+  MVT SrcVT = Op.getOperand(0).getSimpleValueType();
+  unsigned RCID, SrcRCID;
+  MVT ElemVT, SrcElemVT;
+  ArrayRef<unsigned> SubRegs, SrcSubRegs;
+  if (!getXVortexGroupLanes(TLI, VT, RCID, ElemVT, SubRegs) ||
+      !getXVortexGroupLanes(TLI, SrcVT, SrcRCID, SrcElemVT, SrcSubRegs))
+    return SDValue();
+
+  unsigned First = Op.getConstantOperandVal(1);
+  // A lane nothing reads is left undefined.
+  APInt Lanes = getXVortexReadLanes(Op.getNode(), SubRegs);
+  SDLoc DL(Op);
+  SmallVector<SDValue, 17> Ops;
+  Ops.push_back(DAG.getTargetConstant(RCID, DL, MVT::i32));
+  for (unsigned I = 0, E = SubRegs.size(); I != E; ++I) {
+    SDValue Lane =
+        Lanes[I] ? DAG.getTargetExtractSubreg(SrcSubRegs[First + I], DL,
+                                              ElemVT, Op.getOperand(0))
+                 : SDValue(DAG.getMachineNode(TargetOpcode::IMPLICIT_DEF, DL,
+                                              ElemVT),
+                           0);
+    Ops.push_back(Lane);
+    Ops.push_back(DAG.getTargetConstant(SubRegs[I], DL, MVT::i32));
+  }
+  return SDValue(DAG.getMachineNode(TargetOpcode::REG_SEQUENCE, DL, VT, Ops),
+                 0);
+}
+
 // A bitcast to an XVortex group from a group of the other register file
 // (v4i32 and v4f32 on RV32) moves each lane that is read between the register
 // files; one from a group with another lane size (v4f32 and v2i64 on RV64) or
@@ -7747,8 +7780,15 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
   }
   case ISD::INSERT_SUBVECTOR:
     return lowerINSERT_SUBVECTOR(Op, DAG);
-  case ISD::EXTRACT_SUBVECTOR:
+  case ISD::EXTRACT_SUBVECTOR: {
+    unsigned RCID;
+    MVT ElemVT;
+    ArrayRef<unsigned> SubRegs;
+    if (getXVortexGroupLanes(*this, Op.getSimpleValueType(), RCID, ElemVT,
+                             SubRegs))
+      return lowerXVortexExtractSubvector(Op, DAG, *this);
     return lowerEXTRACT_SUBVECTOR(Op, DAG);
+  }
   case ISD::VECTOR_DEINTERLEAVE:
     return lowerVECTOR_DEINTERLEAVE(Op, DAG);
   case ISD::VECTOR_INTERLEAVE:

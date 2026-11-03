@@ -217,15 +217,9 @@ define void @f2i64(ptr %p, ptr %q) {
 define void @copy_v3f32(ptr %p, ptr %q) {
 ; RV32-LABEL: copy_v3f32:
 ; RV32:       # %bb.0:
-; RV32-NEXT:    addi sp, sp, -16
-; RV32-NEXT:    .cfi_def_cfa_offset 16
 ; RV32-NEXT:    vx_flw.q fa2, 0(a1)
 ; RV32-NEXT:    fsw fa4, 8(a0)
-; RV32-NEXT:    vx_fsw.q fa2, 0(sp)
-; RV32-NEXT:    vx_flw.d fa0, 0(sp)
-; RV32-NEXT:    vx_fsw.d fa0, 0(a0)
-; RV32-NEXT:    addi sp, sp, 16
-; RV32-NEXT:    .cfi_def_cfa_offset 0
+; RV32-NEXT:    vx_fsw.d fa2, 0(a0)
 ; RV32-NEXT:    ret
 ;
 ; RV64-LABEL: copy_v3f32:
