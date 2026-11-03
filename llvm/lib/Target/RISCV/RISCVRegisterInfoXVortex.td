@@ -15,7 +15,8 @@
 //
 // Group-N means N consecutive aligned XLen-wide GPRs (or 32-bit FPRs).
 // On RV32 a group-4 GPR is 128 bits (v4i32); on RV64 it is 256 bits (v4i64).
-// Only RV32 element-types are wired into ISel today; RV64 is a follow-up.
+// ISel registers the integer groups with XLen lanes on each (v2i32/v4i32/v8i32
+// on RV32, v2i64/v4i64/v8i64 on RV64); the FPR groups hold f32 lanes on both.
 //
 //===----------------------------------------------------------------------===//
 
