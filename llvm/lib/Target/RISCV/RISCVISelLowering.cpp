@@ -7102,6 +7102,42 @@ static SDValue lowerXVortexGroupBitcast(SDValue Op, SelectionDAG &DAG,
                  0);
 }
 
+// A variable lane of an XVortex group goes through a stack slot, as in the
+// generic expansion, but one aligned to at most the stack alignment: the group
+// is stored and reloaded one register at a time, and the vector's preferred
+// alignment (32 bytes for v8i32, or v4i64 on RV64) would realign the frame.
+static SDValue lowerXVortexVariableLane(SDValue Op, SelectionDAG &DAG,
+                                        const RISCVSubtarget &Subtarget) {
+  bool IsInsert = Op.getOpcode() == ISD::INSERT_VECTOR_ELT;
+  SDValue Vec = Op.getOperand(0);
+  SDValue Idx = Op.getOperand(IsInsert ? 2 : 1);
+  EVT VecVT = Vec.getValueType();
+  EVT EltVT = VecVT.getVectorElementType();
+  MachineFunction &MF = DAG.getMachineFunction();
+  SDLoc DL(Op);
+
+  Align SlotAlign = std::min(
+      DAG.getDataLayout().getPrefTypeAlign(
+          VecVT.getTypeForEVT(*DAG.getContext())),
+      Subtarget.getFrameLowering()->getStackAlign());
+  SDValue Slot = DAG.CreateStackTemporary(VecVT.getStoreSize(), SlotAlign);
+  int FI = cast<FrameIndexSDNode>(Slot)->getIndex();
+  MachinePointerInfo SlotInfo = MachinePointerInfo::getFixedStack(MF, FI);
+  SDValue Chain =
+      DAG.getStore(DAG.getEntryNode(), DL, Vec, Slot, SlotInfo, SlotAlign);
+
+  SDValue EltPtr = DAG.getTargetLoweringInfo().getVectorElementPointer(
+      DAG, Slot, VecVT, Idx);
+  MachinePointerInfo EltInfo = MachinePointerInfo::getUnknownStack(MF);
+  Align EltAlign = commonAlignment(SlotAlign, EltVT.getStoreSize());
+  if (!IsInsert)
+    return DAG.getExtLoad(ISD::EXTLOAD, DL, Op.getValueType(), Chain, EltPtr,
+                          EltInfo, EltVT, EltAlign);
+  Chain = DAG.getTruncStore(Chain, DL, Op.getOperand(1), EltPtr, EltInfo, EltVT,
+                            EltAlign);
+  return DAG.getLoad(VecVT, DL, Chain, Slot, SlotInfo, SlotAlign);
+}
+
 SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
                                             SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {
@@ -7273,12 +7309,15 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
     ArrayRef<unsigned> SubRegs;
     if (getXVortexGroupLanes(*this, Op.getSimpleValueType(), RCID, ElemVT,
                              SubRegs)) {
-      // A constant lane is a sub-register; anything else expands.
+      // A constant lane is a sub-register; a variable one goes through the
+      // stack.
       auto *Lane = dyn_cast<ConstantSDNode>(Op.getOperand(2));
       if (Lane && Lane->getZExtValue() < SubRegs.size())
         return DAG.getTargetInsertSubreg(SubRegs[Lane->getZExtValue()],
                                          SDLoc(Op), Op.getSimpleValueType(),
                                          Op.getOperand(0), Op.getOperand(1));
+      if (!Lane)
+        return lowerXVortexVariableLane(Op, DAG, Subtarget);
       return SDValue();
     }
     return lowerINSERT_VECTOR_ELT(Op, DAG);
@@ -9759,7 +9798,8 @@ SDValue RISCVTargetLowering::lowerEXTRACT_VECTOR_ELT(SDValue Op,
   MVT VecVT = Vec.getSimpleValueType();
   MVT XLenVT = Subtarget.getXLenVT();
 
-  // XVortex groups: a constant lane is a sub-register; anything else expands.
+  // XVortex groups: a constant lane is a sub-register, and a variable one
+  // goes through the stack.
   if (Subtarget.hasVendorXVortex()) {
     unsigned RCID;
     MVT ElemVT;
@@ -9769,6 +9809,8 @@ SDValue RISCVTargetLowering::lowerEXTRACT_VECTOR_ELT(SDValue Op,
       if (Lane && EltVT == ElemVT && Lane->getZExtValue() < SubRegs.size())
         return DAG.getTargetExtractSubreg(SubRegs[Lane->getZExtValue()], DL,
                                           ElemVT, Vec);
+      if (!Lane)
+        return lowerXVortexVariableLane(Op, DAG, Subtarget);
       return SDValue();
     }
   }
