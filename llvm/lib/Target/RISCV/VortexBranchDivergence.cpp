@@ -14,8 +14,11 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSwitch.h"
 
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsRISCV.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/InstIterator.h"
@@ -2096,6 +2099,66 @@ bool DivergenceTracker::isSourceOfDivergence(const Value *V) {
   return false;
 }
 
+// Returns the CSR accessed by a single-instruction inline-asm CSR access, or
+// std::nullopt when the asm is something else or its CSR is not a constant.
+// The CSR is the second operand of csrr/csrrw/csrrs/csrrc(i) and the first of
+// csrw/csrs/csrc(i). It is written as an asm operand ($N, ${N}, ${N:mod}), a
+// number or a CSR name.
+static std::optional<uint64_t> getInlineAsmCSR(const CallBase &CB) {
+  auto *IA = cast<InlineAsm>(CB.getCalledOperand());
+  StringRef AsmStr = StringRef(IA->getAsmString()).trim();
+  if (AsmStr.find_first_of("\n;") != StringRef::npos)
+    return std::nullopt;
+
+  StringRef Mnemonic = AsmStr.take_until(isSpace);
+  int CSRIdx = StringSwitch<int>(Mnemonic)
+                   .Cases("csrr", "csrrw", "csrrs", "csrrc", 1)
+                   .Cases("csrrwi", "csrrsi", "csrrci", 1)
+                   .Cases("csrw", "csrs", "csrc", 0)
+                   .Cases("csrwi", "csrsi", "csrci", 0)
+                   .Default(-1);
+  if (CSRIdx < 0)
+    return std::nullopt;
+  SmallVector<StringRef, 3> Ops;
+  AsmStr.drop_front(Mnemonic.size()).split(Ops, ',');
+  if (Ops.size() <= unsigned(CSRIdx))
+    return std::nullopt;
+  StringRef Op = Ops[CSRIdx].trim();
+
+  if (!Op.consume_front("$")) {
+    uint64_t CSR;
+    if (!Op.getAsInteger(0, CSR))
+      return CSR;
+    if (auto *SysReg = RISCVSysReg::lookupSysRegByName(Op))
+      return SysReg->Encoding;
+    return std::nullopt;
+  }
+
+  if (Op.consume_front("{"))
+    Op = Op.take_until([](char C) { return C == '}' || C == ':'; });
+  unsigned OpNo;
+  if (Op.getAsInteger(10, OpNo))
+    return std::nullopt;
+  // Asm operands number the outputs, inputs and labels in constraint order;
+  // only inputs and indirect outputs are call arguments.
+  unsigned ArgNo = 0;
+  for (const InlineAsm::ConstraintInfo &CI : IA->ParseConstraints()) {
+    if (CI.Type == InlineAsm::isClobber)
+      continue;
+    bool IsArg = CI.Type == InlineAsm::isInput ||
+                 (CI.Type == InlineAsm::isOutput && CI.isIndirect);
+    if (OpNo-- == 0) {
+      if (!IsArg)
+        return std::nullopt;
+      if (auto *C = dyn_cast<ConstantInt>(CB.getArgOperand(ArgNo)))
+        return C->getZExtValue();
+      return std::nullopt;
+    }
+    ArgNo += IsArg;
+  }
+  return std::nullopt;
+}
+
 bool DivergenceTracker::isAlwaysUniform(const Value *V) {
   if (!initialized_) {
     this->initialize();
@@ -2116,42 +2179,22 @@ bool DivergenceTracker::isAlwaysUniform(const Value *V) {
     } else
     if (CB->isInlineAsm()) {
       // All machine CSRs and some special user CSRs are always uniform
-      auto IA = cast<InlineAsm>(CB->getCalledOperand());
-      StringRef AsmStr = IA->getAsmString();
-      if (!(AsmStr.contains('\n') || AsmStr.contains('\n'))) { // skip multi-line asm
-        AsmStr = AsmStr.ltrim(); // skip leading spaces
-        if ((AsmStr.starts_with("csrr ")
-          || AsmStr.starts_with("csrw ")
-          || AsmStr.starts_with("csrwi ")
-          || AsmStr.starts_with("csrs ")
-          || AsmStr.starts_with("csrsi ")
-          || AsmStr.starts_with("csrc ")
-          || AsmStr.starts_with("csrci ")
-          || AsmStr.starts_with("csrrw ")
-          || AsmStr.starts_with("csrrwi ")
-          || AsmStr.starts_with("csrrs ")
-          || AsmStr.starts_with("csrrsi ")
-          || AsmStr.starts_with("csrrc ")
-          || AsmStr.starts_with("csrrci "))) {
-          auto Addr = CB->getArgOperand(0);
-          if (auto *C = dyn_cast<ConstantInt>(Addr)) {
-            uint64_t Addr = C->getZExtValue();
-            // extract RISC-V CSR privileged level
-            uint32_t level = (Addr >> 8) & 0x3;
-            // Machine CSRs are always uniform
-            if (level == 0x3) {
-              LLVM_DEBUG(dbgs() << "*** VX: uniform=true for machine CSR: Add=" << format_hex(Addr, 0) << ", " << *V << "\n");
-              return true;
-            }
-            if (Addr == 0xCC1    // warp_id
-             || Addr == 0xCC2    // core_id
-             || Addr == 0xCC3    // active warps
-             || Addr == 0xCC4) { // active threads
-              // special user CSRs are also uniform
-              LLVM_DEBUG(dbgs() << "*** VX: uniform=true for special user CSR: Add=" << format_hex(Addr, 0) << ", " << *V << "\n");
-              return true;
-            }
-          }
+      if (auto CSR = getInlineAsmCSR(*CB)) {
+        uint64_t Addr = *CSR;
+        // extract RISC-V CSR privileged level
+        uint32_t level = (Addr >> 8) & 0x3;
+        // Machine CSRs are always uniform
+        if (level == 0x3) {
+          LLVM_DEBUG(dbgs() << "*** VX: uniform=true for machine CSR: Add=" << format_hex(Addr, 0) << ", " << *V << "\n");
+          return true;
+        }
+        if (Addr == 0xCC1    // warp_id
+         || Addr == 0xCC2    // core_id
+         || Addr == 0xCC3    // active warps
+         || Addr == 0xCC4) { // active threads
+          // special user CSRs are also uniform
+          LLVM_DEBUG(dbgs() << "*** VX: uniform=true for special user CSR: Add=" << format_hex(Addr, 0) << ", " << *V << "\n");
+          return true;
         }
       }
       LLVM_DEBUG(dbgs() << "*** VX: uniform=false for inline assembly: " << *V << "\n");
