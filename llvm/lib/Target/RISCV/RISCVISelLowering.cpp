@@ -1646,6 +1646,8 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
 
   if (Subtarget.hasVendorXTHeadMemPair())
     setTargetDAGCombine({ISD::LOAD, ISD::STORE});
+  if (Subtarget.hasVendorXVortex())
+    setTargetDAGCombine(ISD::EXTRACT_VECTOR_ELT);
   if (Subtarget.useRVVForFixedLengthVectors())
     setTargetDAGCombine(ISD::BITCAST);
 
@@ -7169,6 +7171,47 @@ static SDValue lowerXVortexVariableLane(SDValue Op, SelectionDAG &DAG,
   Chain = DAG.getTruncStore(Chain, DL, Op.getOperand(1), EltPtr, EltInfo, EltVT,
                             EltAlign);
   return DAG.getLoad(VecVT, DL, Chain, Slot, SlotInfo, SlotAlign);
+}
+
+// A variable lane of an XVortex group loaded only for this extract is loaded
+// from its own address. DAGCombiner does this for a normal load before type
+// legalization; this covers a group whose lanes type legalization promoted
+// (v4i32 on RV64 is an extending v4i64 load), which LegalizeVectorOps would
+// otherwise split into one load per lane before the lane goes through the
+// stack.
+static SDValue combineXVortexVariableLaneOfLoad(SDNode *N, SelectionDAG &DAG,
+                                                const TargetLowering &TLI) {
+  SDValue Vec = N->getOperand(0);
+  SDValue Idx = N->getOperand(1);
+  unsigned RCID;
+  MVT ElemVT;
+  ArrayRef<unsigned> SubRegs;
+  auto *Load = dyn_cast<LoadSDNode>(Vec);
+  if (isa<ConstantSDNode>(Idx) || !Load || !Load->isSimple() ||
+      !Load->isUnindexed() || !Vec.hasOneUse() ||
+      !Vec.getValueType().isSimple() ||
+      !getXVortexGroupLanes(TLI, Vec.getSimpleValueType(), RCID, ElemVT,
+                            SubRegs) ||
+      Idx->hasPredecessor(Load))
+    return SDValue();
+  EVT MemVT = Load->getMemoryVT();
+  EVT MemEltVT = MemVT.getVectorElementType();
+  if (!MemEltVT.isByteSized())
+    return SDValue();
+
+  EVT ResVT = N->getValueType(0);
+  ISD::LoadExtType ExtTy = Load->getExtensionType();
+  if (ExtTy == ISD::NON_EXTLOAD && ResVT != MemEltVT)
+    ExtTy = ISD::EXTLOAD;
+  SDValue EltPtr =
+      TLI.getVectorElementPointer(DAG, Load->getBasePtr(), MemVT, Idx);
+  SDValue Elt = DAG.getExtLoad(
+      ExtTy, SDLoc(N), ResVT, Load->getChain(), EltPtr,
+      MachinePointerInfo(Load->getAddressSpace()), MemEltVT,
+      commonAlignment(Load->getAlign(), MemEltVT.getStoreSize()),
+      Load->getMemOperand()->getFlags(), Load->getAAInfo());
+  DAG.makeEquivalentMemoryOrdering(Load, Elt);
+  return Elt;
 }
 
 SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
@@ -19238,6 +19281,10 @@ SDValue RISCVTargetLowering::PerformDAGCombine(SDNode *N,
     break;
   case ISD::INSERT_VECTOR_ELT:
     if (SDValue V = performINSERT_VECTOR_ELTCombine(N, DAG, Subtarget, *this))
+      return V;
+    break;
+  case ISD::EXTRACT_VECTOR_ELT:
+    if (SDValue V = combineXVortexVariableLaneOfLoad(N, DAG, *this))
       return V;
     break;
   case RISCVISD::VFMV_V_F_VL: {

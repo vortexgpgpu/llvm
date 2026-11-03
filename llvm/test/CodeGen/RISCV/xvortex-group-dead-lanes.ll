@@ -106,23 +106,10 @@ define i32 @var_lane_v4i32(ptr %p, i32 %i) {
 ;
 ; RV64-LABEL: var_lane_v4i32:
 ; RV64:       # %bb.0:
-; RV64-NEXT:    addi sp, sp, -32
-; RV64-NEXT:    .cfi_def_cfa_offset 32
-; RV64-NEXT:    lw a2, 0(a0)
-; RV64-NEXT:    lw a3, 4(a0)
-; RV64-NEXT:    lw a4, 8(a0)
-; RV64-NEXT:    lw a5, 12(a0)
 ; RV64-NEXT:    andi a1, a1, 3
-; RV64-NEXT:    mv a0, sp
-; RV64-NEXT:    slli a1, a1, 3
-; RV64-NEXT:    sd a2, 0(sp)
-; RV64-NEXT:    sd a3, 8(sp)
-; RV64-NEXT:    sd a4, 16(sp)
-; RV64-NEXT:    sd a5, 24(sp)
+; RV64-NEXT:    slli a1, a1, 2
 ; RV64-NEXT:    add a0, a0, a1
-; RV64-NEXT:    ld a0, 0(a0)
-; RV64-NEXT:    addi sp, sp, 32
-; RV64-NEXT:    .cfi_def_cfa_offset 0
+; RV64-NEXT:    lw a0, 0(a0)
 ; RV64-NEXT:    ret
   %v = load <4 x i32>, ptr %p
   %e = extractelement <4 x i32> %v, i32 %i

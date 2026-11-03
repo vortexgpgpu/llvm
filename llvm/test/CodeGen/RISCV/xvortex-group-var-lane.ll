@@ -421,3 +421,99 @@ define void @ins_v8f32(ptr %p, ptr %q, i32 %i, float %s) {
   store <8 x float> %w, ptr %q
   ret void
 }
+
+; A variable lane of a vector loaded only for the extract is loaded from its
+; own address, including a v4i32 or v8i32 whose lanes RV64 promotes to i64
+; (an extending v4i64 or v8i64 load); xvortex-group-dead-lanes has the plain
+; v4i32 case.
+define i64 @ld_sext_v4i32(ptr %p, i32 %i) {
+; RV32-LABEL: ld_sext_v4i32:
+; RV32:       # %bb.0:
+; RV32-NEXT:    andi a1, a1, 3
+; RV32-NEXT:    slli a1, a1, 2
+; RV32-NEXT:    add a0, a0, a1
+; RV32-NEXT:    lw a0, 0(a0)
+; RV32-NEXT:    srai a1, a0, 31
+; RV32-NEXT:    ret
+;
+; RV64-LABEL: ld_sext_v4i32:
+; RV64:       # %bb.0:
+; RV64-NEXT:    andi a1, a1, 3
+; RV64-NEXT:    slli a1, a1, 2
+; RV64-NEXT:    add a0, a0, a1
+; RV64-NEXT:    lw a0, 0(a0)
+; RV64-NEXT:    ret
+  %v = load <4 x i32>, ptr %p
+  %e = extractelement <4 x i32> %v, i32 %i
+  %x = sext i32 %e to i64
+  ret i64 %x
+}
+
+define i32 @ld_ext_v8i32(ptr %p, i32 %i) {
+; RV32-LABEL: ld_ext_v8i32:
+; RV32:       # %bb.0:
+; RV32-NEXT:    andi a1, a1, 7
+; RV32-NEXT:    slli a1, a1, 2
+; RV32-NEXT:    add a0, a0, a1
+; RV32-NEXT:    lw a0, 0(a0)
+; RV32-NEXT:    ret
+;
+; RV64-LABEL: ld_ext_v8i32:
+; RV64:       # %bb.0:
+; RV64-NEXT:    andi a1, a1, 7
+; RV64-NEXT:    slli a1, a1, 2
+; RV64-NEXT:    add a0, a0, a1
+; RV64-NEXT:    lw a0, 0(a0)
+; RV64-NEXT:    ret
+  %v = load <8 x i32>, ptr %p
+  %e = extractelement <8 x i32> %v, i32 %i
+  ret i32 %e
+}
+
+; A volatile vector load reads every lane, so the lane comes from the stack.
+define i32 @ld_volatile_v4i32(ptr %p, i32 %i) {
+; RV32-LABEL: ld_volatile_v4i32:
+; RV32:       # %bb.0:
+; RV32-NEXT:    addi sp, sp, -16
+; RV32-NEXT:    .cfi_def_cfa_offset 16
+; RV32-NEXT:    andi a1, a1, 3
+; RV32-NEXT:    lw a5, 12(a0)
+; RV32-NEXT:    lw a4, 8(a0)
+; RV32-NEXT:    lw a3, 4(a0)
+; RV32-NEXT:    lw a2, 0(a0)
+; RV32-NEXT:    mv a0, sp
+; RV32-NEXT:    slli a1, a1, 2
+; RV32-NEXT:    or a0, a0, a1
+; RV32-NEXT:    sw a2, 0(sp)
+; RV32-NEXT:    sw a3, 4(sp)
+; RV32-NEXT:    sw a4, 8(sp)
+; RV32-NEXT:    sw a5, 12(sp)
+; RV32-NEXT:    lw a0, 0(a0)
+; RV32-NEXT:    addi sp, sp, 16
+; RV32-NEXT:    .cfi_def_cfa_offset 0
+; RV32-NEXT:    ret
+;
+; RV64-LABEL: ld_volatile_v4i32:
+; RV64:       # %bb.0:
+; RV64-NEXT:    addi sp, sp, -32
+; RV64-NEXT:    .cfi_def_cfa_offset 32
+; RV64-NEXT:    lw a5, 12(a0)
+; RV64-NEXT:    lw a4, 8(a0)
+; RV64-NEXT:    lw a3, 4(a0)
+; RV64-NEXT:    lw a2, 0(a0)
+; RV64-NEXT:    andi a1, a1, 3
+; RV64-NEXT:    mv a0, sp
+; RV64-NEXT:    slli a1, a1, 3
+; RV64-NEXT:    sd a2, 0(sp)
+; RV64-NEXT:    sd a3, 8(sp)
+; RV64-NEXT:    sd a4, 16(sp)
+; RV64-NEXT:    sd a5, 24(sp)
+; RV64-NEXT:    add a0, a0, a1
+; RV64-NEXT:    ld a0, 0(a0)
+; RV64-NEXT:    addi sp, sp, 32
+; RV64-NEXT:    .cfi_def_cfa_offset 0
+; RV64-NEXT:    ret
+  %v = load volatile <4 x i32>, ptr %p
+  %e = extractelement <4 x i32> %v, i32 %i
+  ret i32 %e
+}
