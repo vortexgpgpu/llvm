@@ -229,15 +229,22 @@ let RegAltNameIndices = [ABIRegAltName] in {
 // Register classes
 //===----------------------------------------------------------------------===//
 
+// The vector type of each integer group has XLen lanes. A register class's
+// first type is the one an inline-asm operand bound to it ("cg") is copied
+// in, so it must be the HwMode's own type, not the other XLen's.
+def XLenG2VT : ValueTypeByHwMode<[RV32, RV64], [v2i32, v2i64]>;
+def XLenG4VT : ValueTypeByHwMode<[RV32, RV64], [v4i32, v4i64]>;
+def XLenG8VT : ValueTypeByHwMode<[RV32, RV64], [v8i32, v8i64]>;
+
 // GPRG2 — reuses the physical regs of upstream GPRPair. Carries v2i32 on
 // RV32 (2 × 32b) and v2i64 on RV64 (2 × 64b).
 let RegInfos = XLenPairRI in
-def GPRG2 : RISCVRegisterClass<[v2i32, v2i64], 64, (add GPRPair)>;
+def GPRG2 : RISCVRegisterClass<[XLenG2VT], 64, (add GPRPair)>;
 
 // GPRG4 — 4-aligned tuple of 4 XLen regs. Carries v4i32 on RV32, v4i64 on RV64.
 // Allocation order: caller-save groups first, then callee-save.
 let RegInfos = XLenG4RI in
-def GPRG4 : RISCVRegisterClass<[v4i32, v4i64], 128, (add
+def GPRG4 : RISCVRegisterClass<[XLenG4VT], 128, (add
     X8_X9_X10_X11,
     X12_X13_X14_X15,
     X16_X17_X18_X19,
@@ -250,7 +257,7 @@ def GPRG4 : RISCVRegisterClass<[v4i32, v4i64], 128, (add
 
 // GPRG8 — 8-aligned tuple of 8 XLen regs. Carries v8i32 on RV32, v8i64 on RV64.
 let RegInfos = XLenG8RI in
-def GPRG8 : RISCVRegisterClass<[v8i32, v8i64], 256, (add
+def GPRG8 : RISCVRegisterClass<[XLenG8VT], 256, (add
     X8_X9_X10_X11_X12_X13_X14_X15,
     X16_X17_X18_X19_X20_X21_X22_X23,
     X24_X25_X26_X27_X28_X29_X30_X31,

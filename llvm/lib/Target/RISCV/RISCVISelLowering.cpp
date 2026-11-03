@@ -22175,6 +22175,11 @@ RISCVTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
     // XVortex grouped register tuples, selected by the operand's vector type.
     // Binds an aligned register group (FPRG2/4/8 or GPRG2/4/8) as one inline-asm
     // operand so a custom op can read/write the whole window via a base register.
+    // An integer group has XLen lanes: 2, 4 or 8 uintptr_t, a GPR pair, quad or
+    // octet.
+    if (VT.isFixedLengthVector() && VT.isInteger() &&
+        VT.getVectorElementType() != Subtarget.getXLenVT())
+      return std::make_pair(0U, nullptr);
     switch (VT.SimpleTy) {
     case MVT::v2f32: return std::make_pair(0U, &RISCV::FPRG2RegClass);
     case MVT::v4f32: return std::make_pair(0U, &RISCV::FPRG4RegClass);
