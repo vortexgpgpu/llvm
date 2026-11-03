@@ -85,18 +85,10 @@ define void @i2f_v2(ptr %p, ptr %q) {
 define float @i2f_lane(i32 %a, i32 %b, i32 %c, i32 %d) {
 ; RV32-LABEL: i2f_lane:
 ; RV32:       # %bb.0:
-; RV32-NEXT:    addi sp, sp, -16
-; RV32-NEXT:    .cfi_def_cfa_offset 16
-; RV32-NEXT:    mv a4, a2
-; RV32-NEXT:    lw a5, 12(sp)
-; RV32-NEXT:    lw a3, 4(sp)
-; RV32-NEXT:    lw a2, 0(sp)
-; RV32-NEXT:    fmv.w.x fa0, a4
-; RV32-NEXT:    fmv.w.x fa5, a5
-; RV32-NEXT:    fmv.w.x fa5, a3
-; RV32-NEXT:    fmv.w.x fa5, a2
-; RV32-NEXT:    addi sp, sp, 16
-; RV32-NEXT:    .cfi_def_cfa_offset 0
+; RV32-NEXT:    fmv.w.x fa5, a0
+; RV32-NEXT:    fmv.w.x fa0, a2
+; RV32-NEXT:    fmv.w.x fa5, a0
+; RV32-NEXT:    fmv.w.x fa5, a0
 ; RV32-NEXT:    ret
 ;
 ; RV64-LABEL: i2f_lane:
@@ -120,8 +112,6 @@ define float @i2f_lane(i32 %a, i32 %b, i32 %c, i32 %d) {
 define void @f2i_sign(ptr %p, ptr %q, ptr %r) {
 ; RV32-LABEL: f2i_sign:
 ; RV32:       # %bb.0:
-; RV32-NEXT:    addi sp, sp, -16
-; RV32-NEXT:    .cfi_def_cfa_offset 16
 ; RV32-NEXT:    vx_flw.q fa2, 0(a0)
 ; RV32-NEXT:    vx_flw.q ft8, 0(a1)
 ; RV32-NEXT:    lui a0, 524288
@@ -141,8 +131,6 @@ define void @f2i_sign(ptr %p, ptr %q, ptr %r) {
 ; RV32-NEXT:    sw a3, 4(a2)
 ; RV32-NEXT:    sw a4, 8(a2)
 ; RV32-NEXT:    sw a5, 12(a2)
-; RV32-NEXT:    addi sp, sp, 16
-; RV32-NEXT:    .cfi_def_cfa_offset 0
 ; RV32-NEXT:    ret
 ;
 ; RV64-LABEL: f2i_sign:

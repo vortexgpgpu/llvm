@@ -36,26 +36,9 @@ define i32 @two_lanes_v4i32(ptr %p) {
 ;
 ; RV64-LABEL: two_lanes_v4i32:
 ; RV64:       # %bb.0:
-; RV64-NEXT:    addi sp, sp, -64
-; RV64-NEXT:    .cfi_def_cfa_offset 64
-; RV64-NEXT:    sd ra, 56(sp) # 8-byte Folded Spill
-; RV64-NEXT:    sd s0, 48(sp) # 8-byte Folded Spill
-; RV64-NEXT:    .cfi_offset ra, -8
-; RV64-NEXT:    .cfi_offset s0, -16
-; RV64-NEXT:    addi s0, sp, 64
-; RV64-NEXT:    .cfi_def_cfa s0, 0
-; RV64-NEXT:    andi sp, sp, -32
 ; RV64-NEXT:    lw a2, 0(a0)
 ; RV64-NEXT:    lw a5, 12(a0)
 ; RV64-NEXT:    addw a0, a2, a5
-; RV64-NEXT:    addi sp, s0, -64
-; RV64-NEXT:    .cfi_def_cfa sp, 64
-; RV64-NEXT:    ld ra, 56(sp) # 8-byte Folded Reload
-; RV64-NEXT:    ld s0, 48(sp) # 8-byte Folded Reload
-; RV64-NEXT:    .cfi_restore ra
-; RV64-NEXT:    .cfi_restore s0
-; RV64-NEXT:    addi sp, sp, 64
-; RV64-NEXT:    .cfi_def_cfa_offset 0
 ; RV64-NEXT:    ret
   %v = load <4 x i32>, ptr %p
   %a = extractelement <4 x i32> %v, i32 0
@@ -123,13 +106,13 @@ define i32 @var_lane_v4i32(ptr %p, i32 %i) {
 ;
 ; RV64-LABEL: var_lane_v4i32:
 ; RV64:       # %bb.0:
-; RV64-NEXT:    addi sp, sp, -96
-; RV64-NEXT:    .cfi_def_cfa_offset 96
-; RV64-NEXT:    sd ra, 88(sp) # 8-byte Folded Spill
-; RV64-NEXT:    sd s0, 80(sp) # 8-byte Folded Spill
+; RV64-NEXT:    addi sp, sp, -64
+; RV64-NEXT:    .cfi_def_cfa_offset 64
+; RV64-NEXT:    sd ra, 56(sp) # 8-byte Folded Spill
+; RV64-NEXT:    sd s0, 48(sp) # 8-byte Folded Spill
 ; RV64-NEXT:    .cfi_offset ra, -8
 ; RV64-NEXT:    .cfi_offset s0, -16
-; RV64-NEXT:    addi s0, sp, 96
+; RV64-NEXT:    addi s0, sp, 64
 ; RV64-NEXT:    .cfi_def_cfa s0, 0
 ; RV64-NEXT:    andi sp, sp, -32
 ; RV64-NEXT:    lw a2, 0(a0)
@@ -137,21 +120,21 @@ define i32 @var_lane_v4i32(ptr %p, i32 %i) {
 ; RV64-NEXT:    lw a4, 8(a0)
 ; RV64-NEXT:    lw a5, 12(a0)
 ; RV64-NEXT:    andi a1, a1, 3
-; RV64-NEXT:    addi a0, sp, 32
+; RV64-NEXT:    mv a0, sp
 ; RV64-NEXT:    slli a1, a1, 3
-; RV64-NEXT:    sd a2, 32(sp)
-; RV64-NEXT:    sd a3, 40(sp)
-; RV64-NEXT:    sd a4, 48(sp)
-; RV64-NEXT:    sd a5, 56(sp)
+; RV64-NEXT:    sd a2, 0(sp)
+; RV64-NEXT:    sd a3, 8(sp)
+; RV64-NEXT:    sd a4, 16(sp)
+; RV64-NEXT:    sd a5, 24(sp)
 ; RV64-NEXT:    or a0, a0, a1
 ; RV64-NEXT:    ld a0, 0(a0)
-; RV64-NEXT:    addi sp, s0, -96
-; RV64-NEXT:    .cfi_def_cfa sp, 96
-; RV64-NEXT:    ld ra, 88(sp) # 8-byte Folded Reload
-; RV64-NEXT:    ld s0, 80(sp) # 8-byte Folded Reload
+; RV64-NEXT:    addi sp, s0, -64
+; RV64-NEXT:    .cfi_def_cfa sp, 64
+; RV64-NEXT:    ld ra, 56(sp) # 8-byte Folded Reload
+; RV64-NEXT:    ld s0, 48(sp) # 8-byte Folded Reload
 ; RV64-NEXT:    .cfi_restore ra
 ; RV64-NEXT:    .cfi_restore s0
-; RV64-NEXT:    addi sp, sp, 96
+; RV64-NEXT:    addi sp, sp, 64
 ; RV64-NEXT:    .cfi_def_cfa_offset 0
 ; RV64-NEXT:    ret
   %v = load <4 x i32>, ptr %p
@@ -162,13 +145,9 @@ define i32 @var_lane_v4i32(ptr %p, i32 %i) {
 define i64 @one_lane_v2i64(ptr %p) {
 ; RV32-LABEL: one_lane_v2i64:
 ; RV32:       # %bb.0:
-; RV32-NEXT:    addi sp, sp, -16
-; RV32-NEXT:    .cfi_def_cfa_offset 16
 ; RV32-NEXT:    lw a4, 8(a0)
 ; RV32-NEXT:    lw a1, 12(a0)
 ; RV32-NEXT:    mv a0, a4
-; RV32-NEXT:    addi sp, sp, 16
-; RV32-NEXT:    .cfi_def_cfa_offset 0
 ; RV32-NEXT:    ret
 ;
 ; RV64-LABEL: one_lane_v2i64:

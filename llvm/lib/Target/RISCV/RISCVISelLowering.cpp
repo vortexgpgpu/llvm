@@ -199,26 +199,28 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
         }
       }
     };
-    // A constant lane of a group is one of its sub-registers; any other lane
-    // goes through the stack.
+    // A constant lane of a group is one of its sub-registers, and a vector
+    // built from scalars is a REG_SEQUENCE of them; any other lane goes
+    // through the stack.
     if (Subtarget.is64Bit()) {
       SetupXVortexVT(MVT::v2i64, &RISCV::GPRG2RegClass);
       SetupXVortexVT(MVT::v4i64, &RISCV::GPRG4RegClass);
       SetupXVortexVT(MVT::v8i64, &RISCV::GPRG8RegClass);
-      setOperationAction({ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT},
+      setOperationAction({ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT,
+                          ISD::BUILD_VECTOR},
                          {MVT::v2i64, MVT::v4i64, MVT::v8i64}, Custom);
     } else {
       SetupXVortexVT(MVT::v2i32, &RISCV::GPRG2RegClass);
       SetupXVortexVT(MVT::v4i32, &RISCV::GPRG4RegClass);
       SetupXVortexVT(MVT::v8i32, &RISCV::GPRG8RegClass);
-      setOperationAction({ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT},
+      setOperationAction({ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT,
+                          ISD::BUILD_VECTOR},
                          {MVT::v2i32, MVT::v4i32, MVT::v8i32}, Custom);
     }
     if (Subtarget.hasStdExtF()) {
       SetupXVortexVT(MVT::v2f32, &RISCV::FPRG2RegClass);
       SetupXVortexVT(MVT::v4f32, &RISCV::FPRG4RegClass);
       SetupXVortexVT(MVT::v8f32, &RISCV::FPRG8RegClass);
-      // A vector built from scalars is a REG_SEQUENCE of them.
       setOperationAction({ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT,
                           ISD::BUILD_VECTOR},
                          {MVT::v2f32, MVT::v4f32, MVT::v8f32}, Custom);
@@ -7033,15 +7035,14 @@ static SDValue lowerXVortexGroupedStore(SDValue Op, SelectionDAG &DAG,
   return DAG.getNode(ISD::TokenFactor, DL, MVT::Other, StoreChains);
 }
 
-// XVortex FP group built from scalars: a REG_SEQUENCE of its lanes.
+// XVortex group built from scalars: a REG_SEQUENCE of its lanes.
 SDValue RISCVTargetLowering::lowerXVortexBuildVector(SDValue Op,
                                                      SelectionDAG &DAG) const {
   MVT VT = Op.getSimpleValueType();
   unsigned RCID;
   MVT ElemVT;
   ArrayRef<unsigned> SubRegs;
-  if (!VT.isFloatingPoint() ||
-      !getXVortexGroupLanes(*this, VT, RCID, ElemVT, SubRegs))
+  if (!getXVortexGroupLanes(*this, VT, RCID, ElemVT, SubRegs))
     return SDValue();
 
   SDLoc DL(Op);

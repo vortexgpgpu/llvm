@@ -61,8 +61,6 @@ define void @store_v4i1(ptr %p, <4 x i32> %a, <4 x i32> %b) {
 define <4 x i32> @load_v4i1(ptr %p) {
 ; RV32-LABEL: load_v4i1:
 ; RV32:       # %bb.0:
-; RV32-NEXT:    addi sp, sp, -16
-; RV32-NEXT:    .cfi_def_cfa_offset 16
 ; RV32-NEXT:    lbu a1, 0(a1)
 ; RV32-NEXT:    andi a2, a1, 1
 ; RV32-NEXT:    slli a3, a1, 28
@@ -75,8 +73,6 @@ define <4 x i32> @load_v4i1(ptr %p) {
 ; RV32-NEXT:    sw a3, 4(a0)
 ; RV32-NEXT:    sw a4, 8(a0)
 ; RV32-NEXT:    sw a5, 12(a0)
-; RV32-NEXT:    addi sp, sp, 16
-; RV32-NEXT:    .cfi_def_cfa_offset 0
 ; RV32-NEXT:    ret
 ;
 ; RV64-LABEL: load_v4i1:

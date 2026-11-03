@@ -18,16 +18,16 @@ declare void @take_v4i64(<4 x i64>)
 define void @pass_v4i64(ptr %p) {
 ; RV32-LABEL: pass_v4i64:
 ; RV32:       # %bb.0:
-; RV32-NEXT:    addi sp, sp, -96
-; RV32-NEXT:    .cfi_def_cfa_offset 96
-; RV32-NEXT:    sw ra, 92(sp) # 4-byte Folded Spill
-; RV32-NEXT:    sw s0, 88(sp) # 4-byte Folded Spill
-; RV32-NEXT:    sw s2, 84(sp) # 4-byte Folded Spill
-; RV32-NEXT:    sw s3, 80(sp) # 4-byte Folded Spill
-; RV32-NEXT:    sw s4, 76(sp) # 4-byte Folded Spill
-; RV32-NEXT:    sw s5, 72(sp) # 4-byte Folded Spill
-; RV32-NEXT:    sw s6, 68(sp) # 4-byte Folded Spill
-; RV32-NEXT:    sw s7, 64(sp) # 4-byte Folded Spill
+; RV32-NEXT:    addi sp, sp, -64
+; RV32-NEXT:    .cfi_def_cfa_offset 64
+; RV32-NEXT:    sw ra, 60(sp) # 4-byte Folded Spill
+; RV32-NEXT:    sw s0, 56(sp) # 4-byte Folded Spill
+; RV32-NEXT:    sw s2, 52(sp) # 4-byte Folded Spill
+; RV32-NEXT:    sw s3, 48(sp) # 4-byte Folded Spill
+; RV32-NEXT:    sw s4, 44(sp) # 4-byte Folded Spill
+; RV32-NEXT:    sw s5, 40(sp) # 4-byte Folded Spill
+; RV32-NEXT:    sw s6, 36(sp) # 4-byte Folded Spill
+; RV32-NEXT:    sw s7, 32(sp) # 4-byte Folded Spill
 ; RV32-NEXT:    .cfi_offset ra, -4
 ; RV32-NEXT:    .cfi_offset s0, -8
 ; RV32-NEXT:    .cfi_offset s2, -12
@@ -36,7 +36,7 @@ define void @pass_v4i64(ptr %p) {
 ; RV32-NEXT:    .cfi_offset s5, -24
 ; RV32-NEXT:    .cfi_offset s6, -28
 ; RV32-NEXT:    .cfi_offset s7, -32
-; RV32-NEXT:    addi s0, sp, 96
+; RV32-NEXT:    addi s0, sp, 64
 ; RV32-NEXT:    .cfi_def_cfa s0, 0
 ; RV32-NEXT:    andi sp, sp, -32
 ; RV32-NEXT:    lw s4, 16(a0)
@@ -47,26 +47,26 @@ define void @pass_v4i64(ptr %p) {
 ; RV32-NEXT:    lw a7, 4(a0)
 ; RV32-NEXT:    lw s2, 8(a0)
 ; RV32-NEXT:    lw s3, 12(a0)
-; RV32-NEXT:    sw s4, 48(sp)
-; RV32-NEXT:    sw s5, 52(sp)
-; RV32-NEXT:    sw s6, 56(sp)
-; RV32-NEXT:    sw s7, 60(sp)
-; RV32-NEXT:    sw a6, 32(sp)
-; RV32-NEXT:    sw a7, 36(sp)
-; RV32-NEXT:    sw s2, 40(sp)
-; RV32-NEXT:    addi a0, sp, 32
-; RV32-NEXT:    sw s3, 44(sp)
+; RV32-NEXT:    sw s4, 16(sp)
+; RV32-NEXT:    sw s5, 20(sp)
+; RV32-NEXT:    sw s6, 24(sp)
+; RV32-NEXT:    sw s7, 28(sp)
+; RV32-NEXT:    sw a6, 0(sp)
+; RV32-NEXT:    sw a7, 4(sp)
+; RV32-NEXT:    sw s2, 8(sp)
+; RV32-NEXT:    mv a0, sp
+; RV32-NEXT:    sw s3, 12(sp)
 ; RV32-NEXT:    call take_v4i64
-; RV32-NEXT:    addi sp, s0, -96
-; RV32-NEXT:    .cfi_def_cfa sp, 96
-; RV32-NEXT:    lw ra, 92(sp) # 4-byte Folded Reload
-; RV32-NEXT:    lw s0, 88(sp) # 4-byte Folded Reload
-; RV32-NEXT:    lw s2, 84(sp) # 4-byte Folded Reload
-; RV32-NEXT:    lw s3, 80(sp) # 4-byte Folded Reload
-; RV32-NEXT:    lw s4, 76(sp) # 4-byte Folded Reload
-; RV32-NEXT:    lw s5, 72(sp) # 4-byte Folded Reload
-; RV32-NEXT:    lw s6, 68(sp) # 4-byte Folded Reload
-; RV32-NEXT:    lw s7, 64(sp) # 4-byte Folded Reload
+; RV32-NEXT:    addi sp, s0, -64
+; RV32-NEXT:    .cfi_def_cfa sp, 64
+; RV32-NEXT:    lw ra, 60(sp) # 4-byte Folded Reload
+; RV32-NEXT:    lw s0, 56(sp) # 4-byte Folded Reload
+; RV32-NEXT:    lw s2, 52(sp) # 4-byte Folded Reload
+; RV32-NEXT:    lw s3, 48(sp) # 4-byte Folded Reload
+; RV32-NEXT:    lw s4, 44(sp) # 4-byte Folded Reload
+; RV32-NEXT:    lw s5, 40(sp) # 4-byte Folded Reload
+; RV32-NEXT:    lw s6, 36(sp) # 4-byte Folded Reload
+; RV32-NEXT:    lw s7, 32(sp) # 4-byte Folded Reload
 ; RV32-NEXT:    .cfi_restore ra
 ; RV32-NEXT:    .cfi_restore s0
 ; RV32-NEXT:    .cfi_restore s2
@@ -75,7 +75,7 @@ define void @pass_v4i64(ptr %p) {
 ; RV32-NEXT:    .cfi_restore s5
 ; RV32-NEXT:    .cfi_restore s6
 ; RV32-NEXT:    .cfi_restore s7
-; RV32-NEXT:    addi sp, sp, 96
+; RV32-NEXT:    addi sp, sp, 64
 ; RV32-NEXT:    .cfi_def_cfa_offset 0
 ; RV32-NEXT:    ret
 ;
@@ -271,16 +271,12 @@ define void @insert_v4i32(ptr %p, i32 %s) {
 define i64 @extract_v2i64(ptr %p, i64 %s) {
 ; RV32-LABEL: extract_v2i64:
 ; RV32:       # %bb.0:
-; RV32-NEXT:    addi sp, sp, -16
-; RV32-NEXT:    .cfi_def_cfa_offset 16
 ; RV32-NEXT:    lw a4, 8(a0)
 ; RV32-NEXT:    lw a5, 12(a0)
 ; RV32-NEXT:    add a0, a4, a1
 ; RV32-NEXT:    sltu a1, a0, a4
 ; RV32-NEXT:    add a2, a5, a2
 ; RV32-NEXT:    add a1, a2, a1
-; RV32-NEXT:    addi sp, sp, 16
-; RV32-NEXT:    .cfi_def_cfa_offset 0
 ; RV32-NEXT:    ret
 ;
 ; RV64-LABEL: extract_v2i64:
