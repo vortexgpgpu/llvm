@@ -6897,14 +6897,13 @@ static bool isXVortexWideAccess(MVT VT, const MemSDNode *N,
          N->getAlign() >= Align(4);
 }
 
-// The lanes of a group load's value that its users read: all of them unless
-// every user takes one lane, as a constant-index extract or, once that is
-// lowered (users are legalized first), as a sub-register of the group.
-static APInt getXVortexLoadedLanes(const LoadSDNode *Load,
-                                   ArrayRef<unsigned> SubRegs) {
+// The lanes of a group value (result 0 of N) that its users read: all of
+// them unless every user takes one lane, as a constant-index extract or, once
+// that is lowered (users are legalized first), as a sub-register of the group.
+static APInt getXVortexReadLanes(const SDNode *N, ArrayRef<unsigned> SubRegs) {
   unsigned NumElts = SubRegs.size();
   APInt Lanes(NumElts, 0);
-  for (const SDUse &U : Load->uses()) {
+  for (const SDUse &U : N->uses()) {
     if (U.getResNo() != 0)
       continue;
     const SDNode *User = U.getUser();
@@ -6948,7 +6947,7 @@ static SDValue lowerXVortexGroupedLoad(SDValue Op, SelectionDAG &DAG,
 
   // A lane nothing reads is not loaded, unless the access is ordered. A wide
   // access of which one lane is read is that lane's load.
-  APInt Lanes = Load->isSimple() ? getXVortexLoadedLanes(Load, SubRegs)
+  APInt Lanes = Load->isSimple() ? getXVortexReadLanes(Load, SubRegs)
                                  : APInt::getAllOnes(NumElts);
   if (Load->getExtensionType() == ISD::NON_EXTLOAD &&
       isXVortexWideAccess(VT, Load, Subtarget) && Lanes.popcount() > 1)
@@ -7061,10 +7060,10 @@ SDValue RISCVTargetLowering::lowerXVortexBuildVector(SDValue Op,
 }
 
 // A bitcast to an XVortex group from a group of the other register file
-// (v4i32 and v4f32 on RV32) moves each lane between the register files; one
-// from a group with another lane size (v4f32 and v2i64 on RV64) or from a
-// scalar expands through the stack. ISel would otherwise drop the bitcast and
-// read the source's registers as the result's.
+// (v4i32 and v4f32 on RV32) moves each lane that is read between the register
+// files; one from a group with another lane size (v4f32 and v2i64 on RV64) or
+// from a scalar expands through the stack. ISel would otherwise drop the
+// bitcast and read the source's registers as the result's.
 static SDValue lowerXVortexGroupBitcast(SDValue Op, SelectionDAG &DAG,
                                         const TargetLowering &TLI) {
   if (!Op.getOperand(0).getValueType().isSimple())
@@ -7082,13 +7081,21 @@ static SDValue lowerXVortexGroupBitcast(SDValue Op, SelectionDAG &DAG,
   if (RCID == SrcRCID)
     return Op;
 
+  // A lane nothing reads is not moved.
+  APInt Lanes = getXVortexReadLanes(Op.getNode(), SubRegs);
   SDLoc DL(Op);
   SmallVector<SDValue, 17> Ops;
   Ops.push_back(DAG.getTargetConstant(RCID, DL, MVT::i32));
   for (unsigned I = 0, E = SubRegs.size(); I != E; ++I) {
-    SDValue Lane = DAG.getTargetExtractSubreg(SrcSubRegs[I], DL, SrcElemVT,
-                                              Op.getOperand(0));
-    Ops.push_back(DAG.getBitcast(ElemVT, Lane));
+    SDValue Lane;
+    if (Lanes[I])
+      Lane = DAG.getBitcast(
+          ElemVT, DAG.getTargetExtractSubreg(SrcSubRegs[I], DL, SrcElemVT,
+                                             Op.getOperand(0)));
+    else
+      Lane = SDValue(
+          DAG.getMachineNode(TargetOpcode::IMPLICIT_DEF, DL, ElemVT), 0);
+    Ops.push_back(Lane);
     Ops.push_back(DAG.getTargetConstant(SubRegs[I], DL, MVT::i32));
   }
   return SDValue(DAG.getMachineNode(TargetOpcode::REG_SEQUENCE, DL, VT, Ops),

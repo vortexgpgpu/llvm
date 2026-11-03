@@ -85,10 +85,7 @@ define void @i2f_v2(ptr %p, ptr %q) {
 define float @i2f_lane(i32 %a, i32 %b, i32 %c, i32 %d) {
 ; RV32-LABEL: i2f_lane:
 ; RV32:       # %bb.0:
-; RV32-NEXT:    fmv.w.x fa5, a0
 ; RV32-NEXT:    fmv.w.x fa0, a2
-; RV32-NEXT:    fmv.w.x fa5, a0
-; RV32-NEXT:    fmv.w.x fa5, a0
 ; RV32-NEXT:    ret
 ;
 ; RV64-LABEL: i2f_lane:
