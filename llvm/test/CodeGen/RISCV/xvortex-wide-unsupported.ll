@@ -1,8 +1,8 @@
-; RUN: llc -mtriple=riscv32 -mattr=+f,+d,+xvortex -verify-machineinstrs < %s \
+; RUN: llc -mtriple=riscv32 -mattr=+f,+d,+xvortexldstwide -verify-machineinstrs < %s \
 ; RUN:   | FileCheck %s --implicit-check-not=vx_
-; RUN: llc -mtriple=riscv64 -mattr=+f,+xvortex -verify-machineinstrs < %s \
+; RUN: llc -mtriple=riscv64 -mattr=+f,+xvortexldstwide -verify-machineinstrs < %s \
 ; RUN:   | FileCheck %s --implicit-check-not=vx_
-; RUN: llc -mtriple=riscv64 -mattr=+f,+d,+xvortex -verify-machineinstrs < %s \
+; RUN: llc -mtriple=riscv64 -mattr=+f,+d,+xvortexldstwide -verify-machineinstrs < %s \
 ; RUN:   | FileCheck %s --implicit-check-not=vx_
 
 ; vx_flw.d/.q and vx_fsw.d/.q exist only on RV32 with FLEN 32. With D or on

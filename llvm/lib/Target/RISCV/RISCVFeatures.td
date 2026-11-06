@@ -1197,6 +1197,17 @@ def HasVendorXVortexAMOD
       AssemblerPredicate<(all_of FeatureVendorXVortexAMOD),
                          "'XVortexAMOD' (Vortex 64-bit Atomics on RV32)">;
 
+// Vortex's wide loads and stores (VX_CFG_EXT_LDST_WIDE_ENABLE, off by default
+// in the hardware): vx_flw.d/.q and vx_fsw.d/.q on aligned FP register groups,
+// RV32 with F and without D. Without it no wide access is emitted.
+def FeatureVendorXVortexLdstWide
+    : RISCVExtension<1, 0, "Vortex Wide Loads and Stores",
+                     [FeatureVendorXVortex]>;
+def HasVendorXVortexLdstWide
+    : Predicate<"Subtarget->hasVendorXVortexLdstWide()">,
+      AssemblerPredicate<(all_of FeatureVendorXVortexLdstWide),
+                         "'XVortexLdstWide' (Vortex Wide Loads and Stores)">;
+
 // Core-V Extensions
 
 def FeatureVendorXCVelw

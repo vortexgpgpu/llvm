@@ -1,6 +1,6 @@
-# RUN: not llvm-mc -disassemble -triple=riscv32 -mattr=+f,+xvortex < %s 2>&1 \
+# RUN: not llvm-mc -disassemble -triple=riscv32 -mattr=+f,+xvortexldstwide < %s 2>&1 \
 # RUN:     | FileCheck %s
-# RUN: not llvm-mc -disassemble -triple=riscv32 -mattr=+d,+xvortex < %s 2>&1 \
+# RUN: not llvm-mc -disassemble -triple=riscv32 -mattr=+d,+xvortexldstwide < %s 2>&1 \
 # RUN:     | FileCheck --check-prefix=CHECK-D %s
 
 # vx_flw.d with an odd fd (ft1).

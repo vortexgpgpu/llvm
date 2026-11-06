@@ -182,10 +182,11 @@ public:
   }
 
   bool is64Bit() const { return IsRV64; }
-  // XVortex vx_flw.d/.q and vx_fsw.d/.q: wide accesses to aligned FPR32
-  // groups, defined on RV32 with FLEN 32. With V, v2f32/v4f32 are RVV values.
+  // XVortexLdstWide vx_flw.d/.q and vx_fsw.d/.q: wide accesses to aligned
+  // FPR32 groups, defined on RV32 with FLEN 32. With V, v2f32/v4f32 are RVV
+  // values.
   bool hasVortexWideMem() const {
-    return hasVendorXVortex() && !is64Bit() && hasStdExtF() &&
+    return hasVendorXVortexLdstWide() && !is64Bit() && hasStdExtF() &&
            !hasStdExtD() && !useRVVForFixedLengthVectors();
   }
   // Whether the compiler may merge scalar float accesses into the wide ones

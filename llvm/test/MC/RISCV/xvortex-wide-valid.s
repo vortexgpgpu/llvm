@@ -1,9 +1,9 @@
-# RUN: llvm-mc %s -triple=riscv32 -mattr=+f,+xvortex -show-encoding \
+# RUN: llvm-mc %s -triple=riscv32 -mattr=+f,+xvortexldstwide -show-encoding \
 # RUN:     | FileCheck -check-prefixes=CHECK-ASM,CHECK-ASM-AND-OBJ %s
-# RUN: llvm-mc -filetype=obj -triple=riscv32 -mattr=+f,+xvortex < %s \
-# RUN:     | llvm-objdump --mattr=+f,+xvortex --no-print-imm-hex -d - \
+# RUN: llvm-mc -filetype=obj -triple=riscv32 -mattr=+f,+xvortexldstwide < %s \
+# RUN:     | llvm-objdump --mattr=+f,+xvortexldstwide --no-print-imm-hex -d - \
 # RUN:     | FileCheck --check-prefix=CHECK-ASM-AND-OBJ %s
-# RUN: llvm-mc -filetype=obj -triple=riscv32 -mattr=+f,+xvortex < %s \
+# RUN: llvm-mc -filetype=obj -triple=riscv32 -mattr=+f,+xvortexldstwide < %s \
 # RUN:     | llvm-objdump --mattr=+f -d - \
 # RUN:     | FileCheck --check-prefix=CHECK-UNKNOWN %s
 

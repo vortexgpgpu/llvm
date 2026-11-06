@@ -17,7 +17,8 @@
 // from register fd/fs2 + k, at any address, with 4-byte alignment. The
 // register is an aligned FPR32 group (FPRG2 / FPRG4) and imm12 a multiple of
 // 8 (.d) or 16 (.q), so the hardware expands the macro-op without an adder.
-// Defined on RV32 with FLEN 32. Selected for v2f32 / v4f32 loads and stores.
+// Defined on RV32 with FLEN 32 by the xvortexldstwide extension. Selected for
+// v2f32 / v4f32 loads and stores.
 //
 //===----------------------------------------------------------------------===//
 
@@ -69,7 +70,7 @@ def NoStdExtD : Predicate<"!Subtarget->hasStdExtD()">,
                 AssemblerPredicate<(all_of (not FeatureStdExtD)),
                                    "FLEN 32 ('D' disabled)">;
 
-let Predicates = [HasVendorXVortex, HasStdExtF, NoStdExtD, IsRV32] in {
+let Predicates = [HasVendorXVortexLdstWide, HasStdExtF, NoStdExtD, IsRV32] in {
 let DecoderNamespace = "XVortex" in {
 def VX_FLW_D : VXFlwWide<0b011, "vx_flw.d", FPRG2, simm12_lsb000>;
 def VX_FLW_Q : VXFlwWide<0b100, "vx_flw.q", FPRG4, simm12_lsb0000>;
@@ -89,7 +90,7 @@ def : Pat<(riscv_vx_fsw (v2f32 FPRG2:$rs2),
 def : Pat<(riscv_vx_fsw (v4f32 FPRG4:$rs2),
                         (AddrRegImmLsb0000 (XLenVT GPR:$rs1), simm12_lsb0000:$imm12)),
           (VX_FSW_Q FPRG4:$rs2, GPR:$rs1, simm12_lsb0000:$imm12)>;
-} // Predicates = [HasVendorXVortex, HasStdExtF, NoStdExtD, IsRV32]
+} // Predicates = [HasVendorXVortexLdstWide, HasStdExtF, NoStdExtD, IsRV32]
 
 // Spill and reload of the XVortex register groups. Each stays one instruction
 // through register allocation, so the group's live interval is one def or

@@ -1,6 +1,6 @@
-; RUN: llc -mtriple=riscv32 -mattr=+m,+f,+xvortex -verify-machineinstrs < %s \
+; RUN: llc -mtriple=riscv32 -mattr=+m,+f,+xvortexldstwide -verify-machineinstrs < %s \
 ; RUN:   | FileCheck %s
-; RUN: llc -mtriple=riscv32 -mattr=+m,+f,+xvortex -verify-machineinstrs \
+; RUN: llc -mtriple=riscv32 -mattr=+m,+f,+xvortexldstwide -verify-machineinstrs \
 ; RUN:   -riscv-vortex-split-wide-loads=false < %s \
 ; RUN:   | FileCheck %s --check-prefix=NOSPLIT
 ; RUN: llc -mtriple=riscv32 -mattr=+m,+f -verify-machineinstrs < %s \
@@ -312,4 +312,4 @@ define float @dot16(ptr addrspace(3) %a, ptr addrspace(1) %b) #0 {
   ret float %s15
 }
 
-attributes #0 = { "target-features"="+m,+f,+xvortex" }
+attributes #0 = { "target-features"="+m,+f,+xvortexldstwide" }

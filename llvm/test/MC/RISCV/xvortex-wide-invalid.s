@@ -1,10 +1,12 @@
-# RUN: not llvm-mc -triple=riscv32 -mattr=+f,+xvortex < %s 2>&1 \
+# RUN: not llvm-mc -triple=riscv32 -mattr=+f,+xvortexldstwide < %s 2>&1 \
 # RUN:     | FileCheck %s
 # RUN: not llvm-mc -triple=riscv32 -mattr=+f < %s 2>&1 \
 # RUN:     | FileCheck --check-prefix=CHECK-NOVX %s
-# RUN: not llvm-mc -triple=riscv64 -mattr=+f,+xvortex < %s 2>&1 \
+# RUN: not llvm-mc -triple=riscv32 -mattr=+f,+xvortex < %s 2>&1 \
+# RUN:     | FileCheck --check-prefix=CHECK-NOVX %s
+# RUN: not llvm-mc -triple=riscv64 -mattr=+f,+xvortexldstwide < %s 2>&1 \
 # RUN:     | FileCheck --check-prefix=CHECK-RV64 %s
-# RUN: not llvm-mc -triple=riscv32 -mattr=+d,+xvortex < %s 2>&1 \
+# RUN: not llvm-mc -triple=riscv32 -mattr=+d,+xvortexldstwide < %s 2>&1 \
 # RUN:     | FileCheck --check-prefix=CHECK-D %s
 
 # The .d forms need an even register, the .q forms a multiple of 4.
@@ -43,13 +45,13 @@ vx_fsw.q ft0, 24(a0)
 vx_flw.q ft0, %lo(sym)(a0)
 # CHECK: :[[@LINE-1]]:15: error: immediate must be a multiple of 16 bytes in the range [-2048, 2032]
 
-# CHECK-NOVX: :[[@LINE+3]]:1: error: instruction requires the following: 'XVortex' (Vortex ISA Extension)
+# CHECK-NOVX: :[[@LINE+3]]:1: error: instruction requires the following: 'XVortexLdstWide' (Vortex Wide Loads and Stores)
 # CHECK-RV64: :[[@LINE+2]]:1: error: instruction requires the following: RV32I Base Instruction Set
 # CHECK-D: :[[@LINE+1]]:1: error: instruction requires the following: FLEN 32 ('D' disabled)
 vx_flw.q ft0, 0(a0)
 # CHECK-D: :[[@LINE+1]]:1: error: instruction requires the following: FLEN 32 ('D' disabled)
 vx_flw.d ft0, 0(a0)
-# CHECK-NOVX: :[[@LINE+3]]:1: error: instruction requires the following: 'XVortex' (Vortex ISA Extension)
+# CHECK-NOVX: :[[@LINE+3]]:1: error: instruction requires the following: 'XVortexLdstWide' (Vortex Wide Loads and Stores)
 # CHECK-RV64: :[[@LINE+2]]:1: error: instruction requires the following: RV32I Base Instruction Set
 # CHECK-D: :[[@LINE+1]]:1: error: instruction requires the following: FLEN 32 ('D' disabled)
 vx_fsw.q ft0, 0(a0)
