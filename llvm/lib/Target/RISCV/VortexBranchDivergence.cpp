@@ -1855,6 +1855,16 @@ bool VortexBranchDivergence2::runOnMachineFunction(MachineFunction &MF) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+static bool isUniformVarAnnotation(const IntrinsicInst *II) {
+  if (II->getIntrinsicID() != Intrinsic::var_annotation)
+    return false;
+  auto GV = dyn_cast<GlobalVariable>(II->getArgOperand(1)->stripPointerCasts());
+  if (!GV || !GV->hasInitializer())
+    return false;
+  auto CDA = dyn_cast<ConstantDataArray>(GV->getInitializer());
+  return CDA && CDA->isCString() && CDA->getAsCString() == "vortex.uniform";
+}
+
 // This pass collects uniform IR annotations and replaces them with
 // riscv_vx_uniform intrinsic calls. It processes both metadata-based
 // annotations (e.g., "vortex.uniform") and intrinsic-based annotations
@@ -1877,15 +1887,11 @@ PreservedAnalyses UniformAnnotationPass::run(Function &F, FunctionAnalysisManage
       } else
       // process intrinsic-based annotations
       if (auto II = dyn_cast<IntrinsicInst>(&I)) {
-        if (II->getIntrinsicID() == Intrinsic::var_annotation) {
-          auto gv  = dyn_cast<GlobalVariable>(II->getOperand(1));
-          auto cda = dyn_cast<ConstantDataArray>(gv->getInitializer());
-          if (cda->getAsCString() == "vortex.uniform") {
-            auto AnnotatedAlloca = dyn_cast<AllocaInst>(II->getOperand(0));
-            if (AnnotatedAlloca) {
-              LLVM_DEBUG(dbgs() << "*** VX: found var_annotation: " << *AnnotatedAlloca << "\n");
-              uniformInsts.push_back({AnnotatedAlloca, true}); // true = var_annotation annotation
-            }
+        if (isUniformVarAnnotation(II)) {
+          auto AnnotatedAlloca = dyn_cast<AllocaInst>(II->getOperand(0));
+          if (AnnotatedAlloca) {
+            LLVM_DEBUG(dbgs() << "*** VX: found var_annotation: " << *AnnotatedAlloca << "\n");
+            uniformInsts.push_back({AnnotatedAlloca, true}); // true = var_annotation annotation
           }
         }
       }
@@ -1899,12 +1905,25 @@ PreservedAnalyses UniformAnnotationPass::run(Function &F, FunctionAnalysisManage
       // annotated stack variable is uniform, so each load is marked where it
       // is. (Forwarding one load to all of them would read a single store's
       // value everywhere, dropping every other store, e.g. a loop induction
-      // variable's update.)
+      // variable's update.) The markers then carry the annotation, so its
+      // calls are erased: they pass the variable's address to a call, which
+      // keeps SROA from promoting it and leaves each marked load a reload
+      // from the stack.
       auto AnnotatedAlloca = reinterpret_cast<AllocaInst*>(Instr.first);
       SmallVector<LoadInst *, 4> Loads;
-      for (auto User : AnnotatedAlloca->users())
+      SmallVector<IntrinsicInst *, 1> Annotations;
+      for (auto User : AnnotatedAlloca->users()) {
         if (auto LI = dyn_cast<LoadInst>(User))
           Loads.push_back(LI);
+        else if (auto II = dyn_cast<IntrinsicInst>(User))
+          if (II->getArgOperand(0) == AnnotatedAlloca &&
+              isUniformVarAnnotation(II))
+            Annotations.push_back(II);
+      }
+      for (auto II : Annotations) {
+        II->eraseFromParent();
+        changed = true;
+      }
       for (auto LI : Loads) {
         IRBuilder<> Builder(LI->getNextNode());
         auto ValueType = LI->getType();
