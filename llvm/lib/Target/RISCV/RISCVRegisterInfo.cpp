@@ -15,12 +15,14 @@
 #include "RISCVSubtarget.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/CodeGen/LiveRegMatrix.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Module.h"
@@ -38,6 +40,15 @@ static cl::opt<bool>
                          cl::init(false),
                          cl::desc("Disable two address hints for register "
                                   "allocation"));
+
+// Vortex's operand collector reads source registers from four banks selected
+// by the register number's low two bits; two sources in one bank cost an extra
+// read cycle.
+static cl::opt<bool> VortexBankHints(
+    "riscv-vortex-bank-hints", cl::Hidden, cl::init(true),
+    cl::desc("On XVortex, prefer registers in a different bank from the other "
+             "source registers of the instructions that read them"));
+static constexpr unsigned VortexNumRegBanks = 4;
 
 static_assert(RISCV::X1 == RISCV::X0 + 1, "Register list not consecutive");
 static_assert(RISCV::X31 == RISCV::X0 + 31, "Register list not consecutive");
@@ -1033,5 +1044,69 @@ bool RISCVRegisterInfo::getRegAllocationHints(
     if (TwoAddrHints.count(OrderReg))
       Hints.push_back(OrderReg);
 
+  if (VortexBankHints && !BaseImplRetVal && Subtarget.hasVendorXVortex())
+    addVortexBankHints(VirtReg, Order, Hints, MF, *VRM, Matrix);
+
   return BaseImplRetVal;
+}
+
+static bool isVortexBankedReg(MCRegister Reg) {
+  return RISCV::GPRRegClass.contains(Reg) ||
+         RISCV::FPR16RegClass.contains(Reg) ||
+         RISCV::FPR32RegClass.contains(Reg) ||
+         RISCV::FPR64RegClass.contains(Reg);
+}
+
+void RISCVRegisterInfo::addVortexBankHints(Register VirtReg,
+                                           ArrayRef<MCPhysReg> Order,
+                                           SmallVectorImpl<MCPhysReg> &Hints,
+                                           const MachineFunction &MF,
+                                           const VirtRegMap &VRM,
+                                           const LiveRegMatrix *Matrix) const {
+  if (Order.empty() || !isVortexBankedReg(Order.front()))
+    return;
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
+
+  // Count, per bank, the already-assigned registers read alongside VirtReg.
+  unsigned Conflicts[VortexNumRegBanks] = {};
+  bool AnyConflict = false;
+  for (const MachineOperand &MO : MRI.use_nodbg_operands(VirtReg)) {
+    if (MO.getSubReg())
+      continue;
+    for (const MachineOperand &Src : MO.getParent()->explicit_uses()) {
+      if (!Src.isReg() || Src.getSubReg() || Src.getReg() == VirtReg)
+        continue;
+      Register Reg = Src.getReg();
+      MCRegister Phys = Reg.isPhysical() ? Reg.asMCReg() : VRM.getPhys(Reg);
+      // x0 is never read from the register file.
+      if (!Phys || Phys == RISCV::X0 || !isVortexBankedReg(Phys))
+        continue;
+      ++Conflicts[getEncodingValue(Phys) % VortexNumRegBanks];
+      AnyConflict = true;
+    }
+  }
+  if (!AnyConflict)
+    return;
+
+  // Reorder only registers that cost nothing extra to take: a callee-saved
+  // register no other value uses yet costs a save and a restore, so those keep
+  // their place after the hints.
+  const MCPhysReg *CSRs = MRI.getCalleeSavedRegs();
+  auto IsCheap = [&](MCPhysReg Reg) {
+    if (Matrix && Matrix->isPhysRegUsed(Reg))
+      return true;
+    for (const MCPhysReg *CSR = CSRs; CSR && *CSR; ++CSR)
+      if (*CSR == Reg)
+        return false;
+    return true;
+  };
+  SmallVector<MCPhysReg, 32> Cheap;
+  for (MCPhysReg Reg : Order)
+    if (!MRI.isReserved(Reg) && !is_contained(Hints, Reg) && IsCheap(Reg))
+      Cheap.push_back(Reg);
+  llvm::stable_sort(Cheap, [&](MCPhysReg A, MCPhysReg B) {
+    return Conflicts[getEncodingValue(A) % VortexNumRegBanks] <
+           Conflicts[getEncodingValue(B) % VortexNumRegBanks];
+  });
+  Hints.append(Cheap.begin(), Cheap.end());
 }

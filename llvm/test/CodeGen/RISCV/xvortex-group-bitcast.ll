@@ -153,15 +153,15 @@ define void @f2i_sign(ptr %p, ptr %q, ptr %r) {
 ; RV64-NEXT:    fsw fa5, 12(sp)
 ; RV64-NEXT:    lw a1, 0(sp)
 ; RV64-NEXT:    lw a3, 4(sp)
-; RV64-NEXT:    lw a4, 8(sp)
-; RV64-NEXT:    lw a5, 12(sp)
+; RV64-NEXT:    lw a5, 8(sp)
+; RV64-NEXT:    lw a6, 12(sp)
 ; RV64-NEXT:    xor a1, a1, a0
 ; RV64-NEXT:    xor a3, a3, a0
-; RV64-NEXT:    xor a4, a4, a0
-; RV64-NEXT:    xor a0, a5, a0
+; RV64-NEXT:    xor a5, a5, a0
+; RV64-NEXT:    xor a0, a6, a0
 ; RV64-NEXT:    sw a1, 0(a2)
 ; RV64-NEXT:    sw a3, 4(a2)
-; RV64-NEXT:    sw a4, 8(a2)
+; RV64-NEXT:    sw a5, 8(a2)
 ; RV64-NEXT:    sw a0, 12(a2)
 ; RV64-NEXT:    addi sp, sp, 16
 ; RV64-NEXT:    .cfi_def_cfa_offset 0

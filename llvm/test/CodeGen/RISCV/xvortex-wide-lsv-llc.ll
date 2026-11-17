@@ -542,8 +542,8 @@ define float @local_float4_spill(ptr addrspace(3) align 16 %p) {
 ; VX-NEXT:    flw ft9, 16(sp) # 4-byte Folded Reload
 ; VX-NEXT:    flw ft10, 20(sp) # 4-byte Folded Reload
 ; VX-NEXT:    flw ft11, 24(sp) # 4-byte Folded Reload
-; VX-NEXT:    fadd.s fa1, ft11, fs11
-; VX-NEXT:    fadd.s fa0, ft10, fs10
+; VX-NEXT:    fadd.s fa0, ft11, fs11
+; VX-NEXT:    fadd.s fa1, ft10, fs10
 ; VX-NEXT:    fadd.s ft0, ft9, fs9
 ; VX-NEXT:    fadd.s ft1, ft8, fs8
 ; VX-NEXT:    flw ft8, 44(sp) # 4-byte Folded Reload
@@ -562,26 +562,26 @@ define float @local_float4_spill(ptr addrspace(3) align 16 %p) {
 ; VX-NEXT:    flw ft9, 80(sp) # 4-byte Folded Reload
 ; VX-NEXT:    flw ft10, 84(sp) # 4-byte Folded Reload
 ; VX-NEXT:    flw ft11, 88(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs4, 60(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs5, 64(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs6, 68(sp) # 4-byte Folded Reload
-; VX-NEXT:    flw fs7, 72(sp) # 4-byte Folded Reload
-; VX-NEXT:    fadd.s ft6, ft11, fs7
-; VX-NEXT:    fadd.s ft7, ft10, fs6
-; VX-NEXT:    fadd.s fa6, ft9, fs5
-; VX-NEXT:    fadd.s fa7, ft8, fs4
+; VX-NEXT:    flw fa6, 60(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fa7, 64(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs2, 68(sp) # 4-byte Folded Reload
+; VX-NEXT:    flw fs3, 72(sp) # 4-byte Folded Reload
+; VX-NEXT:    fadd.s ft7, ft11, fs3
+; VX-NEXT:    fadd.s ft6, ft10, fs2
+; VX-NEXT:    fadd.s fa7, ft9, fa7
+; VX-NEXT:    fadd.s fa6, ft8, fa6
 ; VX-NEXT:    fmul.s fa2, fa2, ft1
 ; VX-NEXT:    fmul.s fa3, fa3, ft0
-; VX-NEXT:    fmul.s ft0, ft5, fa7
-; VX-NEXT:    fmul.s ft1, ft4, fa6
-; VX-NEXT:    fsub.s fa3, fa3, ft1
-; VX-NEXT:    fsub.s fa2, fa2, ft0
+; VX-NEXT:    fmul.s ft1, ft5, fa6
+; VX-NEXT:    fmul.s ft0, ft4, fa7
+; VX-NEXT:    fsub.s fa3, fa3, ft0
+; VX-NEXT:    fsub.s fa2, fa2, ft1
 ; VX-NEXT:    fadd.s fa3, fa2, fa3
-; VX-NEXT:    fmul.s fa4, fa4, fa0
-; VX-NEXT:    fmul.s fa5, fa5, fa1
-; VX-NEXT:    fmul.s fa2, ft3, ft7
-; VX-NEXT:    fmul.s fa1, ft2, ft6
-; VX-NEXT:    fsub.s fa5, fa5, fa1
+; VX-NEXT:    fmul.s fa4, fa4, fa1
+; VX-NEXT:    fmul.s fa5, fa5, fa0
+; VX-NEXT:    fmul.s fa2, ft3, ft6
+; VX-NEXT:    fmul.s fa0, ft2, ft7
+; VX-NEXT:    fsub.s fa5, fa5, fa0
 ; VX-NEXT:    fsub.s fa4, fa4, fa2
 ; VX-NEXT:    fadd.s fa5, fa4, fa5
 ; VX-NEXT:    fadd.s fa0, fa3, fa5

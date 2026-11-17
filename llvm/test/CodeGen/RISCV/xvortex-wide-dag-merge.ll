@@ -20,13 +20,13 @@ define void @copy4(ptr %d, ptr %s) {
 ; SCALAR-LABEL: copy4:
 ; SCALAR:       # %bb.0:
 ; SCALAR-NEXT:    flw fa5, 0(a1)
-; SCALAR-NEXT:    flw fa4, 4(a1)
-; SCALAR-NEXT:    flw fa3, 8(a1)
-; SCALAR-NEXT:    flw fa2, 12(a1)
+; SCALAR-NEXT:    flw fa3, 4(a1)
+; SCALAR-NEXT:    flw fa2, 8(a1)
+; SCALAR-NEXT:    flw fa1, 12(a1)
 ; SCALAR-NEXT:    fsw fa5, 0(a0)
-; SCALAR-NEXT:    fsw fa4, 4(a0)
-; SCALAR-NEXT:    fsw fa3, 8(a0)
-; SCALAR-NEXT:    fsw fa2, 12(a0)
+; SCALAR-NEXT:    fsw fa3, 4(a0)
+; SCALAR-NEXT:    fsw fa2, 8(a0)
+; SCALAR-NEXT:    fsw fa1, 12(a0)
 ; SCALAR-NEXT:    ret
   %s1 = getelementptr inbounds float, ptr %s, i32 1
   %s2 = getelementptr inbounds float, ptr %s, i32 2

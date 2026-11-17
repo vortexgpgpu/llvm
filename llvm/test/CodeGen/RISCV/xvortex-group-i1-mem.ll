@@ -15,13 +15,13 @@ define void @store_v4i1(ptr %p, <4 x i32> %a, <4 x i32> %b) {
 ; RV32-NEXT:    lw a4, 4(a2)
 ; RV32-NEXT:    lw a5, 8(a2)
 ; RV32-NEXT:    lw a2, 12(a2)
-; RV32-NEXT:    lw a6, 12(a1)
-; RV32-NEXT:    lw a7, 8(a1)
-; RV32-NEXT:    lw t0, 0(a1)
+; RV32-NEXT:    lw a7, 12(a1)
+; RV32-NEXT:    lw a6, 8(a1)
+; RV32-NEXT:    lw t1, 0(a1)
 ; RV32-NEXT:    lw a1, 4(a1)
-; RV32-NEXT:    slt a2, a6, a2
-; RV32-NEXT:    slt a5, a7, a5
-; RV32-NEXT:    slt a3, t0, a3
+; RV32-NEXT:    slt a2, a7, a2
+; RV32-NEXT:    slt a5, a6, a5
+; RV32-NEXT:    slt a3, t1, a3
 ; RV32-NEXT:    slt a1, a1, a4
 ; RV32-NEXT:    slli a2, a2, 3
 ; RV32-NEXT:    slli a5, a5, 2
@@ -38,13 +38,13 @@ define void @store_v4i1(ptr %p, <4 x i32> %a, <4 x i32> %b) {
 ; RV64-NEXT:    lw a4, 8(a2)
 ; RV64-NEXT:    lw a5, 16(a2)
 ; RV64-NEXT:    lw a2, 24(a2)
-; RV64-NEXT:    lw a6, 24(a1)
-; RV64-NEXT:    lw a7, 16(a1)
-; RV64-NEXT:    lw t0, 0(a1)
+; RV64-NEXT:    lw a7, 24(a1)
+; RV64-NEXT:    lw a6, 16(a1)
+; RV64-NEXT:    lw t1, 0(a1)
 ; RV64-NEXT:    lw a1, 8(a1)
-; RV64-NEXT:    slt a2, a6, a2
-; RV64-NEXT:    slt a5, a7, a5
-; RV64-NEXT:    slt a3, t0, a3
+; RV64-NEXT:    slt a2, a7, a2
+; RV64-NEXT:    slt a5, a6, a5
+; RV64-NEXT:    slt a3, t1, a3
 ; RV64-NEXT:    slt a1, a1, a4
 ; RV64-NEXT:    slli a2, a2, 3
 ; RV64-NEXT:    slli a5, a5, 2
