@@ -132,6 +132,13 @@ struct RISCVRegisterInfo : public RISCVGenRegisterInfo {
                              const MachineFunction &MF, const VirtRegMap *VRM,
                              const LiveRegMatrix *Matrix) const override;
 
+  // Appends the free registers ordered so that VirtReg avoids the register
+  // banks of the other sources read with it.
+  void addVortexBankHints(Register VirtReg, ArrayRef<MCPhysReg> Order,
+                          SmallVectorImpl<MCPhysReg> &Hints,
+                          const MachineFunction &MF, const VirtRegMap &VRM,
+                          const LiveRegMatrix *Matrix) const;
+
   static bool isVRRegClass(const TargetRegisterClass *RC) {
     return RISCVRI::isVRegClass(RC->TSFlags) &&
            RISCVRI::getNF(RC->TSFlags) == 1;

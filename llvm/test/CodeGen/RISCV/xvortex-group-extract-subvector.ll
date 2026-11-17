@@ -196,7 +196,7 @@ define void @v8i32_hi(ptr %p, ptr %q) {
 ; RV64-NEXT:    add t2, a5, a5
 ; RV64-NEXT:    add t3, a4, a4
 ; RV64-NEXT:    add t4, a3, a3
-; RV64-NEXT:    add t5, a2, a2
+; RV64-NEXT:    add t6, a2, a2
 ; RV64-NEXT:    add t1, t1, t1
 ; RV64-NEXT:    add t0, t0, t0
 ; RV64-NEXT:    add a7, a7, a7
@@ -205,7 +205,7 @@ define void @v8i32_hi(ptr %p, ptr %q) {
 ; RV64-NEXT:    sw a7, 4(a0)
 ; RV64-NEXT:    sw t0, 8(a0)
 ; RV64-NEXT:    sw t1, 12(a0)
-; RV64-NEXT:    sw t5, 16(a0)
+; RV64-NEXT:    sw t6, 16(a0)
 ; RV64-NEXT:    sw t4, 20(a0)
 ; RV64-NEXT:    sw t3, 24(a0)
 ; RV64-NEXT:    sw t2, 28(a0)
